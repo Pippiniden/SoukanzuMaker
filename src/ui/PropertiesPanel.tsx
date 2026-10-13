@@ -9,7 +9,7 @@ import {
 } from '../model/defaults';
 import { boxOf, isBox, normalizePolygon } from '../model/geometry';
 import { Check, ColorInput, FontSelect, NumberInput, Row, Section, Seg, Select, Slider, TextArea, TextInput } from './controls';
-import { alignTo, arrangeWithGap, centerInFrame, fitFrameAround, fitFrameToContents, matchSize, type AlignMode, type AlignRef } from '../model/fit';
+import { scaleDoc, alignTo, arrangeWithGap, centerInFrame, fitFrameAround, fitFrameToContents, matchSize, type AlignMode, type AlignRef } from '../model/fit';
 import { autoTextArea } from '../canvas/cardLayout';
 import { useState } from 'react';
 import { fileToDataUrl, loadImage, pickFiles } from '../io/image';
@@ -46,6 +46,18 @@ export function PropertiesPanel() {
 
 function DocProps({ doc }: { doc: Doc }) {
   const preset = CANVAS_PRESETS.find((p) => p.width === doc.width && p.height === doc.height);
+  const [scaleContent, setScaleContent] = useState(false);
+  // キャンバスを指定の大きさにする（中身も合わせる場合は縦横比を保って拡大縮小し、中央に置く）
+  const resizeCanvas = (w: number, h: number) =>
+    useStore.getState().commit((d) => {
+      if (!scaleContent) return { ...d, width: w, height: h };
+      const f = Math.min(w / d.width, h / d.height);
+      return { ...scaleDoc(d, f, (w - d.width * f) / 2, (h - d.height * f) / 2), width: w, height: h };
+    });
+  const scaleAll = (f: number) => {
+    useStore.getState().commit((d) => scaleDoc(d, f));
+    window.dispatchEvent(new Event('soukanzu:fit'));
+  };
   return (
     <>
       <Section title="相関図">
@@ -59,7 +71,7 @@ function DocProps({ doc }: { doc: Doc }) {
             value={preset ? preset.label : 'custom'}
             onChange={(e) => {
               const p = CANVAS_PRESETS.find((x) => x.label === e.target.value);
-              if (p) useStore.getState().commit((d) => ({ ...d, width: p.width, height: p.height }));
+              if (p) resizeCanvas(p.width, p.height);
             }}
           >
             {CANVAS_PRESETS.map((p) => (
@@ -76,6 +88,17 @@ function DocProps({ doc }: { doc: Doc }) {
             <NumberInput value={doc.height} min={100} max={8000} onChange={(v) => patchDoc({ height: v })} />
           </span>
         </Row>
+        <Row label="">
+          <Check checked={scaleContent} onChange={setScaleContent} label="サイズを選ぶとき中身も合わせて拡大縮小" />
+        </Row>
+        <Row label="解像度">
+          <span className="btn-row">
+            <button type="button" onClick={() => scaleAll(0.5)}>×0.5</button>
+            <button type="button" onClick={() => scaleAll(1.5)}>×1.5</button>
+            <button type="button" onClick={() => scaleAll(2)}>×2</button>
+          </span>
+        </Row>
+        <p className="hint">「解像度」はキャンバスと中身（位置・大きさ・文字・線の太さ）をまとめて拡大縮小します。見た目の比率はそのままです。</p>
         <Row label="背景">
           <ColorInput value={doc.background} onChange={(v) => patchDoc({ background: v })} />
         </Row>
@@ -85,6 +108,20 @@ function DocProps({ doc }: { doc: Doc }) {
             {doc.background2 && <ColorInput value={doc.background2} onChange={(v) => patchDoc({ background2: v })} />}
           </span>
         </Row>
+      </Section>
+      <Section title="矢印">
+        <Row label="太さの倍率">
+          <span className="color-input">
+            <Slider
+              value={doc.settings.edgeScale}
+              min={0.5}
+              max={4}
+              step={0.1}
+              onChange={(v) => patchDoc((d) => ({ settings: { ...d.settings, edgeScale: v } }))}
+            />
+          </span>
+        </Row>
+        <p className="hint">すべての矢印の線と矢じりを、それぞれの太さにこの倍率をかけて描きます。キャンバスを大きくして矢印が細く見えるときに。</p>
       </Section>
       <Section title="グリッド">
         <Row label="間隔(px)">
@@ -909,6 +946,20 @@ function MultiProps({ els }: { els: Element[] }) {
       {onlyType === 'edge' && (
         <Section title="矢印のスタイルを一括変更">
           <PresetButtons<EdgeEl> presets={EDGE_PRESETS} onPick={(s) => patchEls(ids, s as Partial<Element>)} />
+          <Row label="線の太さ">
+            <NumberInput
+              value={(els[0] as EdgeEl).strokeWidth}
+              min={0.5}
+              max={60}
+              step={0.5}
+              onChange={(v) =>
+                patchEls(ids, (e) => (e.type === 'edge' ? ({ strokeWidth: v, endWidth: e.taper ? e.endWidth * (v / e.strokeWidth) : e.endWidth } as Partial<Element>) : {}))
+              }
+            />
+          </Row>
+          <Row label="矢じり">
+            <NumberInput value={(els[0] as EdgeEl).headSize} min={2} max={80} onChange={(v) => patchEls(ids, { headSize: v } as Partial<Element>)} />
+          </Row>
         </Section>
       )}
       <CommonActions ids={ids} />

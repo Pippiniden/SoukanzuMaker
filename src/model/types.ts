@@ -176,6 +176,8 @@ export interface DocSettings {
   guides: boolean;
   /** 新しく作る要素のフォント */
   font: string;
+  /** すべての矢印の太さ・矢じりにかける倍率 */
+  edgeScale: number;
 }
 
 export interface Doc {

@@ -1,5 +1,5 @@
 import { FONTS, fontStack } from '../model/fonts';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 export function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -42,17 +42,57 @@ export function TextArea(props: { value: string; onChange: (v: string) => void; 
   );
 }
 
-export function NumberInput(props: { value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number }) {
+/**
+ * 数値の入力欄。
+ * 入力途中の値（例：200 と打つ途中の「2」）は最低値で補正せずにそのまま表示し、
+ * 範囲内になった時点で反映する。範囲外のまま確定（フォーカスを外す・Enter）したときだけ補正する。
+ */
+export function NumberInput(props: {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  className?: string;
+  title?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const { min, max } = props;
+  const shown = draft ?? String(Math.round(props.value * 100) / 100);
+  const inRange = (v: number) => (min === undefined || v >= min) && (max === undefined || v <= max);
+  const clamp = (v: number) => Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v));
+  const commit = (raw: string) => {
+    const v = parseFloat(raw);
+    if (!Number.isNaN(v)) {
+      const c = clamp(v);
+      if (c !== props.value) props.onChange(c);
+    }
+    setDraft(null);
+  };
   return (
     <input
       type="number"
-      value={Math.round(props.value * 100) / 100}
-      min={props.min}
-      max={props.max}
+      className={props.className}
+      title={props.title}
+      value={shown}
+      min={min}
+      max={max}
       step={props.step ?? 1}
       onChange={(e) => {
-        const v = parseFloat(e.target.value);
-        if (!Number.isNaN(v)) props.onChange(v);
+        const raw = e.target.value;
+        setDraft(raw);
+        const v = parseFloat(raw);
+        if (!Number.isNaN(v) && inRange(v)) props.onChange(v);
+      }}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          commit(e.currentTarget.value);
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(null);
+          e.currentTarget.blur();
+        }
       }}
     />
   );

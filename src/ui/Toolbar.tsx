@@ -5,6 +5,7 @@ import { exportImage } from '../io/exportPng';
 import { fileToDataUrl, pickFiles } from '../io/image';
 import { loadProjectFile, PROJECT_EXT, saveProjectFile } from '../io/projectFile';
 import { sampleDoc } from '../model/sample';
+import { NumberInput } from './controls';
 
 const ICONS: Record<string, React.ReactNode> = {
   select: <path d="M5 3l12 7-5 1.5L9.5 17z" />,
@@ -161,17 +162,13 @@ export function Toolbar() {
           <input type="checkbox" checked={settings.guides} onChange={(e) => setSettings({ guides: e.target.checked })} />
           ガイド
         </label>
-        <input
-          type="number"
+        <NumberInput
           className="grid-size"
           value={settings.gridSize}
           min={4}
           max={200}
           title="グリッド間隔(px)"
-          onChange={(e) => {
-            const v = parseInt(e.target.value, 10);
-            if (v >= 4) patchDoc((d) => ({ settings: { ...d.settings, gridSize: v } }));
-          }}
+          onChange={(v) => patchDoc((d) => ({ settings: { ...d.settings, gridSize: v } }))}
         />
         <button type="button" onClick={() => st.snapAllToGrid()} title="すべての要素の位置とサイズをグリッドに合わせ直す">
           全体を揃える

@@ -607,6 +607,7 @@ export function Editor() {
                     from={byId.get(el.from) as BoxElement | undefined}
                     to={byId.get(el.to) as BoxElement | undefined}
                     selected={selSet.has(el.id)}
+                    widthScale={doc.settings.edgeScale}
                     h={handlers}
                   />
                 );

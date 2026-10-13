@@ -323,6 +323,6 @@ export function emptyDoc(): Doc {
     height: 1500,
     background: '#ffffff',
     elements: [],
-    settings: { gridSize: 20, showGrid: true, snap: true, majorEvery: 5, guides: true, font: DEFAULT_FONT },
+    settings: { gridSize: 20, showGrid: true, snap: true, majorEvery: 5, guides: true, font: DEFAULT_FONT, edgeScale: 1 },
   };
 }

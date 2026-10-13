@@ -136,3 +136,47 @@ export function centerInFrame(doc: Doc, frameId: Id, ids: Id[]): Doc {
     dy = top + h / 2 - (u.y + u.h / 2);
   return apply(doc, new Map(els.map((e) => [e.id, moved(e, dx, dy)])));
 }
+
+/**
+ * キャンバスと中身をまとめて拡大縮小する（解像度を上げても見た目の比率を保つ）。
+ * 位置・大きさ・文字サイズ・線の太さ・角の丸み・グリッドをすべて同じ倍率にする。
+ */
+export function scaleDoc(doc: Doc, f: number, offsetX = 0, offsetY = 0): Doc {
+  const r = (v: number) => Math.round(v * f * 100) / 100;
+  const px = (v: number) => Math.round((v * f + offsetX) * 100) / 100;
+  const py = (v: number) => Math.round((v * f + offsetY) * 100) / 100;
+  const elements = doc.elements.map((e): Element => {
+    switch (e.type) {
+      case 'card':
+        return {
+          ...e, x: px(e.x), y: py(e.y), width: r(e.width), height: r(e.height),
+          strokeWidth: r(e.strokeWidth), cornerRadius: r(e.cornerRadius), titleSize: r(e.titleSize),
+          subtitleSize: r(e.subtitleSize), badgeSize: r(e.badgeSize), textArea: r(e.textArea),
+        };
+      case 'frame':
+        return {
+          ...e, x: px(e.x), y: py(e.y), width: r(e.width), height: r(e.height), points: e.points.map(r),
+          strokeWidth: r(e.strokeWidth), cornerRadius: r(e.cornerRadius), titleSize: r(e.titleSize),
+          subtitleSize: r(e.subtitleSize), titleDx: r(e.titleDx), titleDy: r(e.titleDy),
+        };
+      case 'text':
+        return { ...e, x: px(e.x), y: py(e.y), width: r(e.width), fontSize: r(e.fontSize), strokeWidth: r(e.strokeWidth) };
+      case 'image':
+        return { ...e, x: px(e.x), y: py(e.y), width: r(e.width), height: r(e.height) };
+      case 'junction':
+        return { ...e, x: px(e.x), y: py(e.y), dotSize: r(e.dotSize) };
+      case 'edge':
+        return {
+          ...e, waypoints: e.waypoints.map((w) => ({ x: px(w.x), y: py(w.y) })),
+          strokeWidth: r(e.strokeWidth), endWidth: r(e.endWidth), headSize: r(e.headSize), labelSize: r(e.labelSize),
+        };
+    }
+  });
+  return {
+    ...doc,
+    width: Math.round(doc.width * f),
+    height: Math.round(doc.height * f),
+    elements,
+    settings: { ...doc.settings, gridSize: Math.max(4, Math.round(doc.settings.gridSize * f)) },
+  };
+}

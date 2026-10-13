@@ -380,14 +380,17 @@ export function EdgeShape(props: {
   from?: BoxElement;
   to?: BoxElement;
   selected: boolean;
+  /** 全体の太さ倍率 */
+  widthScale?: number;
   h: ShapeHandlers;
 }) {
   const { el, from, to, selected, h: handlers } = props;
+  const k = props.widthScale ?? 1;
   if (!from || !to || from.hidden || to.hidden) return null;
   const geo = edgeGeometry(el, from, to);
   const head = el.head;
-  const w0 = el.strokeWidth;
-  const w1 = el.taper ? el.endWidth : el.strokeWidth;
+  const w0 = el.strokeWidth * k;
+  const w1 = (el.taper ? el.endWidth : el.strokeWidth) * k;
   const lp = pointAlong(geo.points, el.labelPos);
   const pts = geo.points;
 
@@ -452,7 +455,7 @@ export function EdgeShape(props: {
             dash: el.dash,
             headStart: head === 'start' || head === 'both',
             headEnd: head === 'end' || head === 'both',
-            headSize: el.headSize,
+            headSize: el.headSize * k,
             roundStart: from.type === 'junction',
             roundEnd: to.type === 'junction',
             miter: el.routing === 'orthogonal',
