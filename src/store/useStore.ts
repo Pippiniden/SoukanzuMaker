@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { Assets, Doc, Element, Id } from '../model/types';
-import { emptyDoc, newId } from '../model/defaults';
+import type { Assets, Doc, EdgeEl, Element, Id } from '../model/types';
+import { emptyDoc, migrateDoc, newId } from '../model/defaults';
 import { boxOf, isBox, snap } from '../model/geometry';
 
 export type Tool = 'select' | 'hand' | 'card' | 'frame' | 'text' | 'edge';
@@ -21,6 +21,8 @@ interface State {
   /** 枠ツールで作る形（rect / round / ellipse / poly:<テンプレートキー>） */
   frameKind: string;
   edgeFrom: Id | null;
+  /** 分岐から矢印を引くときに引き継ぐ見た目 */
+  edgeStyle: Partial<EdgeEl>;
   vertexEdit: Id | null;
   orthoVertex: boolean;
   past: Doc[];
@@ -71,6 +73,7 @@ export const useStore = create<State>()((set, get) => ({
   tool: 'select',
   frameKind: 'rect',
   edgeFrom: null,
+  edgeStyle: {},
   vertexEdit: null,
   orthoVertex: true,
   past: [],
@@ -181,13 +184,19 @@ export const useStore = create<State>()((set, get) => ({
         const from = idMap.get(e.from) ?? (existing.has(e.from) ? e.from : null);
         const to = idMap.get(e.to) ?? (existing.has(e.to) ? e.to : null);
         if (!from || !to) continue;
-        out.push({ ...e, id: idMap.get(e.id)!, from, to });
+        const bothCopied = idMap.has(e.from) && idMap.has(e.to);
+        const waypoints = (e.waypoints ?? []).map((w) => (bothCopied ? { x: w.x + 20, y: w.y + 20 } : w));
+        out.push({ ...e, id: idMap.get(e.id)!, from, to, waypoints });
       } else {
         out.push({ ...e, id: idMap.get(e.id)!, x: e.x + 20, y: e.y + 20 });
       }
     }
     // 次の貼り付けはさらにずらす
-    set({ clipboard: clip.map((e) => (e.type === 'edge' ? e : { ...e, x: e.x + 20, y: e.y + 20 })) });
+    set({
+      clipboard: clip.map((e) =>
+        e.type === 'edge' ? { ...e, waypoints: (e.waypoints ?? []).map((w) => ({ x: w.x + 20, y: w.y + 20 })) } : { ...e, x: e.x + 20, y: e.y + 20 },
+      ),
+    });
     get().addElements(out);
   },
   duplicate: () => {
@@ -216,6 +225,7 @@ export const useStore = create<State>()((set, get) => ({
     const g = get().doc.settings.gridSize;
     get().commit((d) =>
       mapEls(d, (e) => {
+        if (e.type === 'edge') return { ...e, waypoints: (e.waypoints ?? []).map((w) => ({ x: snap(w.x, g), y: snap(w.y, g) })) };
         if (!isBox(e) || e.locked) return e;
         const moved = { ...e, x: snap(e.x, g), y: snap(e.y, g) } as Element;
         if (e.type === 'card' || e.type === 'image' || (e.type === 'frame' && e.shape !== 'polygon')) {
@@ -232,7 +242,7 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   loadDoc: (doc, assets) =>
-    set({ doc, assets, past: [], future: [], selection: [], vertexEdit: null, edgeFrom: null, gestureBase: null }),
+    set({ doc: migrateDoc(doc), assets, past: [], future: [], selection: [], vertexEdit: null, edgeFrom: null, gestureBase: null }),
 
   addAsset: (dataUrl) => {
     const id = newId('asset');

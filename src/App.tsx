@@ -9,6 +9,7 @@ import { sampleDoc } from './model/sample';
 import { fileToDataUrl } from './io/image';
 import { makeImage } from './model/defaults';
 import type { Element } from './model/types';
+import { shiftWaypoints, waypointStarts } from './model/edgeOps';
 
 // 開発時のみ、ブラウザのコンソールから状態を確認できるようにする
 if (import.meta.env.DEV) (window as unknown as { soukanzu: typeof useStore }).soukanzu = useStore;
@@ -121,7 +122,7 @@ function useShortcuts() {
         return;
       }
       if (k === 'escape') {
-        if (st.edgeFrom) st.set({ edgeFrom: null });
+        if (st.edgeFrom) st.set({ edgeFrom: null, edgeStyle: {} });
         else if (st.vertexEdit) st.set({ vertexEdit: null });
         else if (st.tool !== 'select') st.setTool('select');
         else st.setSelection([]);
@@ -132,11 +133,12 @@ function useShortcuts() {
         const step = e.shiftKey ? st.doc.settings.gridSize : 1;
         const dx = k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0;
         const dy = k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0;
-        const sel = new Set(st.selection);
+        const sel = new Set(st.selection.filter((id) => st.doc.elements.find((x) => x.id === id && x.type !== 'edge' && !x.locked)));
+        const wps = waypointStarts(st.doc, sel);
         st.commit((d) => ({
           ...d,
           elements: d.elements.map((el) =>
-            sel.has(el.id) && el.type !== 'edge' && !el.locked ? ({ ...el, x: el.x + dx, y: el.y + dy } as Element) : el,
+            sel.has(el.id) && el.type !== 'edge' ? ({ ...el, x: el.x + dx, y: el.y + dy } as Element) : shiftWaypoints(el, wps, dx, dy),
           ),
         }));
         return;

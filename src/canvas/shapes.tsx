@@ -1,10 +1,11 @@
-import { Arrow, Circle, Ellipse, Group, Image as KImage, Label, Line, Rect, Tag, Text } from 'react-konva';
+import { Circle, Ellipse, Group, Image as KImage, Label, Line, Rect, Shape, Tag, Text } from 'react-konva';
 import type Konva from 'konva';
 import useImage from 'use-image';
-import type { BoxElement, CardEl, EdgeEl, FrameEl, ImageEl, TextEl } from '../model/types';
+import type { BoxElement, CardEl, EdgeEl, FrameEl, ImageEl, JunctionEl, TextEl } from '../model/types';
 import { FONT_FAMILY } from '../model/defaults';
 import { edgeGeometry, pointAlong, textSize } from '../model/geometry';
 import { dashArray, measureText, toVertical } from './text';
+import { drawEdge } from './edgeDraw';
 
 type KEvt = Konva.KonvaEventObject<PointerEvent>;
 
@@ -367,6 +368,33 @@ export function ImageShape({ el, src, h: handlers }: { el: ImageEl; src?: string
   );
 }
 
+// ---------- 分岐点 ----------
+
+export function JunctionShape({ el, scale, selected, h: handlers }: { el: JunctionEl; scale: number; selected: boolean; h: ShapeHandlers }) {
+  const r = 5 / scale;
+  return (
+    <Group
+      id={el.id}
+      x={el.x}
+      y={el.y}
+      visible={!el.hidden}
+      onPointerDown={(e) => handlers.onDown(e, el.id)}
+      onDblClick={() => handlers.onDbl(el.id)}
+    >
+      {el.dot && <Circle radius={el.dotSize / 2} fill={el.dotColor} listening={false} />}
+      {/* 編集用の目印（画像には出ない） */}
+      <Circle
+        name="ui"
+        radius={selected ? r * 1.4 : r}
+        fill={selected ? '#4f8cff' : '#ffffff'}
+        stroke="#4f8cff"
+        strokeWidth={1.5 / scale}
+        hitStrokeWidth={10 / scale}
+      />
+    </Group>
+  );
+}
+
 // ---------- 矢印 ----------
 
 export function EdgeShape(props: {
@@ -379,9 +407,11 @@ export function EdgeShape(props: {
   const { el, from, to, selected, h: handlers } = props;
   if (!from || !to || from.hidden || to.hidden) return null;
   const geo = edgeGeometry(el, from, to);
-  const sw = el.strokeWidth;
   const head = el.head;
+  const w0 = el.strokeWidth;
+  const w1 = el.taper ? el.endWidth : el.strokeWidth;
   const lp = pointAlong(geo.points, el.labelPos);
+  const pts = geo.points;
 
   let label: React.ReactNode = null;
   if (el.label) {
@@ -407,6 +437,12 @@ export function EdgeShape(props: {
     );
   }
 
+  const tracePath = (ctx: Konva.Context) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+  };
+
   return (
     <Group
       id={el.id}
@@ -415,35 +451,39 @@ export function EdgeShape(props: {
       onDblClick={() => handlers.onDbl(el.id)}
     >
       {selected && (
-        <Arrow
+        <Line
           name="ui"
-          points={geo.points}
-          tension={geo.tension}
+          points={pts}
           stroke="#4f8cff"
-          fill="#4f8cff"
           opacity={0.35}
-          strokeWidth={sw + 8}
-          pointerLength={0}
-          pointerWidth={0}
+          strokeWidth={Math.max(w0, w1) + 8}
           lineJoin="round"
           lineCap="round"
           listening={false}
         />
       )}
-      <Arrow
-        points={geo.points}
-        tension={geo.tension}
+      <Shape
         stroke={el.stroke}
-        fill={el.stroke}
-        strokeWidth={sw}
-        dash={dashArray(el.dash, sw)}
-        lineCap={el.dash === 'dotted' ? 'round' : 'butt'}
-        lineJoin="miter"
-        pointerLength={el.headSize}
-        pointerWidth={el.headSize}
-        pointerAtEnding={head === 'end' || head === 'both'}
-        pointerAtBeginning={head === 'start' || head === 'both'}
-        hitStrokeWidth={Math.max(14, sw + 10)}
+        strokeWidth={Math.max(w0, w1)}
+        hitStrokeWidth={Math.max(14, Math.max(w0, w1) + 10)}
+        sceneFunc={(ctx) =>
+          drawEdge(ctx._context, pts, {
+            color: el.stroke,
+            w0,
+            w1,
+            dash: el.dash,
+            headStart: head === 'start' || head === 'both',
+            headEnd: head === 'end' || head === 'both',
+            headSize: el.headSize,
+            roundStart: from.type === 'junction',
+            roundEnd: to.type === 'junction',
+            miter: el.routing === 'orthogonal',
+          })
+        }
+        hitFunc={(ctx, shape) => {
+          tracePath(ctx);
+          ctx.strokeShape(shape);
+        }}
       />
       {label}
     </Group>

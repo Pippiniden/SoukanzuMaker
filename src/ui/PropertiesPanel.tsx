@@ -1,5 +1,5 @@
 import { patchDoc, patchEls, useStore } from '../store/useStore';
-import type { BoxElement, CardEl, Dash, Doc, EdgeEl, Element, FrameEl, Id, ImageEl, Side, TextEl } from '../model/types';
+import type { BoxElement, CardEl, Dash, Doc, EdgeEl, Element, FrameEl, Id, ImageEl, JunctionEl, Side, TextEl } from '../model/types';
 import {
   CANVAS_PRESETS,
   CARD_PRESETS,
@@ -119,6 +119,7 @@ function SingleProps({ el }: { el: Element }) {
       {el.type === 'edge' && <EdgeProps el={el} p={p} />}
       {el.type === 'text' && <TextProps el={el} p={p} />}
       {el.type === 'image' && <ImageProps el={el} p={p} />}
+      {el.type === 'junction' && <JunctionProps el={el} p={p} />}
       {isBox(el) && <GeometryProps els={[el]} />}
       <CommonActions ids={[el.id]} />
     </>
@@ -424,10 +425,33 @@ function EdgeProps({ el, p }: { el: EdgeEl; p: P }) {
         <Row label="出る辺">
           <Select value={el.fromSide} options={SIDE_OPTIONS} onChange={(v) => p({ fromSide: v })} />
         </Row>
+        {el.fromSide !== 'auto' && (
+          <Row label="出る位置">
+            <Slider value={el.fromOffset} min={0} max={1} onChange={(v) => p({ fromOffset: v })} />
+          </Row>
+        )}
         <Row label="入る辺">
           <Select value={el.toSide} options={SIDE_OPTIONS} onChange={(v) => p({ toSide: v })} />
         </Row>
-        {el.routing !== 'straight' && (
+        {el.toSide !== 'auto' && (
+          <Row label="入る位置">
+            <Slider value={el.toOffset} min={0} max={1} onChange={(v) => p({ toOffset: v })} />
+          </Row>
+        )}
+        <Row label="折れ点">
+          <span className="btn-row">
+            <span className="muted-text">{el.waypoints.length}個</span>
+            {el.waypoints.length > 0 && (
+              <button type="button" onClick={() => useStore.getState().updateEl(el.id, { waypoints: [] } as Partial<Element>)}>
+                すべて消す
+              </button>
+            )}
+          </span>
+        </Row>
+        <p className="hint">
+          端の□をドラッグすると接続先や辺上の位置を変えられます。線上の○をドラッグすると折れ点が増え、折れ点はダブルクリックで消せます。
+        </p>
+        {el.routing !== 'straight' && el.waypoints.length === 0 && (
           <Row label={el.routing === 'curved' ? '曲がり具合' : '折れ位置'}>
             <Slider value={el.bend} min={0} max={1} onChange={(v) => p({ bend: v })} />
           </Row>
@@ -435,15 +459,27 @@ function EdgeProps({ el, p }: { el: EdgeEl; p: P }) {
       </Section>
       <Section title="スタイル">
         <PresetButtons<EdgeEl> presets={EDGE_PRESETS} onPick={(s) => p(s)} />
-        <Row label="線">
+        <Row label={el.taper ? '線（始点の太さ）' : '線'}>
           <span className="color-input">
             <ColorInput value={el.stroke} onChange={(v) => p({ stroke: v })} />
-            <NumberInput value={el.strokeWidth} min={1} max={30} onChange={(v) => p({ strokeWidth: v })} />
+            <NumberInput value={el.strokeWidth} min={0.5} max={60} step={0.5} onChange={(v) => p({ strokeWidth: v })} />
           </span>
         </Row>
-        <Row label="線の種類">
-          <Seg value={el.dash} onChange={(v) => p({ dash: v })} options={DASH_OPTIONS} />
+        <Row label="太さを変える">
+          <span className="color-input">
+            <Check
+              checked={el.taper}
+              onChange={(v) => p({ taper: v, endWidth: v && el.endWidth <= el.strokeWidth ? el.strokeWidth * 2.5 : el.endWidth })}
+              label="終点"
+            />
+            {el.taper && <NumberInput value={el.endWidth} min={0.5} max={60} step={0.5} onChange={(v) => p({ endWidth: v })} />}
+          </span>
         </Row>
+        {!el.taper && (
+          <Row label="線の種類">
+            <Seg value={el.dash} onChange={(v) => p({ dash: v })} options={DASH_OPTIONS} />
+          </Row>
+        )}
         <Row label="矢じりの大きさ">
           <Slider value={el.headSize} min={4} max={40} step={1} onChange={(v) => p({ headSize: v })} />
         </Row>
@@ -466,6 +502,21 @@ function EdgeProps({ el, p }: { el: EdgeEl; p: P }) {
         </Row>
       </Section>
     </>
+  );
+}
+
+function JunctionProps({ el, p }: { el: JunctionEl; p: P }) {
+  return (
+    <Section title="分岐点">
+      <p className="hint">矢印が枝分かれ・合流する点です。この点をドラッグすると、つながった矢印がまとめて動きます。矢印ツールでこの点をクリックすると、さらに枝を増やせます。</p>
+      <Row label="点を描く">
+        <span className="color-input">
+          <Check checked={el.dot} onChange={(v) => p({ dot: v })} label="" />
+          {el.dot && <ColorInput value={el.dotColor} onChange={(v) => p({ dotColor: v })} />}
+          {el.dot && <NumberInput value={el.dotSize} min={2} max={60} onChange={(v) => p({ dotSize: v })} />}
+        </span>
+      </Row>
+    </Section>
   );
 }
 
@@ -543,6 +594,7 @@ function GeometryProps({ els }: { els: BoxElement[] }) {
   const el = els[0];
   const b = boxOf(el);
   const sized = el.type === 'card' || el.type === 'frame' || el.type === 'image';
+  const point = el.type === 'junction';
   const setPos = (k: 'x' | 'y', v: number) => patchEls([el.id], { [k]: v } as Partial<Element>);
   const setSize = (k: 'width' | 'height', v: number) => {
     if (el.type === 'frame' && el.shape === 'polygon') {
@@ -562,12 +614,12 @@ function GeometryProps({ els }: { els: BoxElement[] }) {
           <NumberInput value={b.y} onChange={(v) => setPos('y', v)} />
         </span>
       </Row>
-      <Row label={sized ? '幅 / 高さ' : '幅'}>
+      {!point && <Row label={sized ? '幅 / 高さ' : '幅'}>
         <span className="pair">
           <NumberInput value={b.w} min={10} onChange={(v) => (el.type === 'text' ? patchEls([el.id], { width: v } as Partial<Element>) : setSize('width', v))} />
           {sized && <NumberInput value={b.h} min={10} onChange={(v) => setSize('height', v)} />}
         </span>
-      </Row>
+      </Row>}
     </Section>
   );
 }
@@ -724,6 +776,8 @@ export function displayName(e: Element, all?: Element[]): string {
       return e.text.split('\n')[0].slice(0, 16) || 'テキスト';
     case 'image':
       return '画像';
+    case 'junction':
+      return '分岐点';
     case 'edge': {
       const find = (id: Id) => all?.find((x) => x.id === id);
       const a = find(e.from),

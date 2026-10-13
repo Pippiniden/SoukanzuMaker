@@ -2,14 +2,16 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Circle, Layer, Rect, Shape, Stage, Transformer } from 'react-konva';
 import type Konva from 'konva';
 import { useStore } from '../store/useStore';
-import type { BoxElement, CardEl, Element, FrameEl, Id } from '../model/types';
-import { boxOf, boxesIntersect, frameContents, isBox, moveVertexOrtho, normalizePolygon, snap } from '../model/geometry';
+import type { BoxElement, CardEl, EdgeEl, Element, FrameEl, Id, JunctionEl } from '../model/types';
+import { boxOf, boxesIntersect, edgeGeometry, frameContents, isBox, moveVertexOrtho, nearestSide, normalizePolygon, projectOnPolyline, snap, type Pt } from '../model/geometry';
 import { makeCard, makeEdge, makeFrame, makeImage, makeText } from '../model/defaults';
-import { CardShape, EdgeShape, FrameShape, ImageShape, TextShape, type ShapeHandlers } from './shapes';
+import { CardShape, EdgeShape, FrameShape, ImageShape, JunctionShape, TextShape, type ShapeHandlers } from './shapes';
+import { insertWaypointIndex, shiftWaypoints, splitEdge, waypointStarts } from '../model/edgeOps';
 import { stageRef } from './stageRef';
 import { fileToDataUrl } from '../io/image';
 
 interface DragState {
+  wpStarts: Map<Id, Pt[]>;
   primary: Id;
   startPointer: { x: number; y: number };
   starts: Map<Id, { x: number; y: number }>;
@@ -131,12 +133,27 @@ export function Editor() {
         if (st.tool === 'edge') {
           e.cancelBubble = true;
           const el = st.doc.elements.find((x) => x.id === id);
-          if (!el || el.type === 'edge') return;
-          if (!st.edgeFrom) st.set({ edgeFrom: id });
-          else if (st.edgeFrom !== id) {
-            const edge = makeEdge(st.edgeFrom, id);
+          if (!el) return;
+          let target = id;
+          let style: Partial<EdgeEl> = {};
+          if (el.type === 'edge') {
+            // 既存の矢印をクリック：そこに分岐点を作って、分岐（始点）または合流（終点）にする
+            const p = toPage(e.evt.clientX, e.evt.clientY);
+            const res = splitEdge(st.doc, id, p, snapOn(e.evt) ? st.doc.settings.gridSize : null);
+            if (!res) return;
+            st.commit(() => res.doc);
+            target = res.junctionId;
+            const { id: _i, from: _f, to: _t, waypoints: _w, label: _l, fromSide: _fs, toSide: _ts, fromOffset: _fo, toOffset: _to, head: _h, ...rest } = el;
+            style = st.edgeFrom ? { ...rest, head: 'none' } : { ...rest, head: 'end', labelPos: 0.5 };
+            if (el.taper) style = { ...style, taper: false };
+          }
+          if (!st.edgeFrom) st.set({ edgeFrom: target, edgeStyle: style });
+          else if (st.edgeFrom !== target) {
+            const fromEl = st.doc.elements.find((x) => x.id === st.edgeFrom);
+            const base = fromEl?.type === 'junction' ? useStore.getState().edgeStyle : {};
+            const edge = makeEdge(st.edgeFrom, target, { ...base, ...style });
             st.addElements([edge]);
-            st.set({ edgeFrom: null });
+            st.set({ edgeFrom: null, edgeStyle: {} });
           }
           return;
         }
@@ -166,6 +183,7 @@ export function Editor() {
           starts.set(mid, { x: m.x, y: m.y });
         }
         drag.current = {
+          wpStarts: waypointStarts(st.doc, movers),
           primary: id,
           startPointer: toPage(e.evt.clientX, e.evt.clientY),
           starts,
@@ -222,7 +240,8 @@ export function Editor() {
           ...doc,
           elements: doc.elements.map((el) => {
             const s0 = d.starts.get(el.id);
-            return s0 ? ({ ...el, x: s0.x + dx, y: s0.y + dy } as Element) : el;
+            if (s0) return { ...el, x: s0.x + dx, y: s0.y + dy } as Element;
+            return shiftWaypoints(el, d.wpStarts, dx, dy);
           }),
         }));
         return;
@@ -270,6 +289,7 @@ export function Editor() {
       .filter((e) => isBox(e) && !e.hidden && !e.locked)
       .filter((e) => {
         const b = boxOf(e as BoxElement);
+        if (e.type === 'junction') return b.x >= box.x && b.y >= box.y && b.x <= box.x + box.w && b.y <= box.y + box.h;
         // 枠は全体が範囲に入ったときだけ選ぶ（中身だけを選びやすくするため）
         if (e.type === 'frame') return b.x >= box.x && b.y >= box.y && b.x + b.w <= box.x + box.w && b.y + b.h <= box.y + box.h;
         return boxesIntersect(b, box);
@@ -331,7 +351,7 @@ export function Editor() {
     () =>
       selection
         .map((id) => byId.get(id))
-        .filter((e): e is BoxElement => !!e && isBox(e) && !e.locked && !e.hidden && e.id !== vertexEdit),
+        .filter((e): e is Exclude<BoxElement, JunctionEl> => !!e && isBox(e) && e.type !== 'junction' && !e.locked && !e.hidden && e.id !== vertexEdit),
     [selection, byId, vertexEdit],
   );
   const keepRatio = transformTargets.length === 1 && transformTargets[0].type === 'image';
@@ -351,7 +371,7 @@ export function Editor() {
     const patches = new Map<Id, Partial<Element>>();
     for (const node of tr.nodes()) {
       const el = st.doc.elements.find((e) => e.id === node.id());
-      if (!el || !isBox(el)) continue;
+      if (!el || !isBox(el) || el.type === 'junction') continue;
       const sx = node.scaleX(),
         sy = node.scaleY();
       node.scale({ x: 1, y: 1 });
@@ -440,6 +460,7 @@ export function Editor() {
 
   // ---------- 描画 ----------
 
+  const selectedEdge = selection.length === 1 && byId.get(selection[0])?.type === 'edge' ? (byId.get(selection[0]) as EdgeEl) : undefined;
   const vertexFrame = vertexEdit ? (byId.get(vertexEdit) as FrameEl | undefined) : undefined;
   const edgeFromEl = edgeFrom ? byId.get(edgeFrom) : undefined;
   const cursor =
@@ -506,6 +527,8 @@ export function Editor() {
                 return <TextShape key={el.id} el={el} h={handlers} />;
               case 'image':
                 return <ImageShape key={el.id} el={el} src={assets[el.imageId]} h={handlers} />;
+              case 'junction':
+                return <JunctionShape key={el.id} el={el} scale={view.scale} selected={selSet.has(el.id)} h={handlers} />;
               case 'edge':
                 return (
                   <EdgeShape
@@ -563,6 +586,16 @@ export function Editor() {
             boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)}
           />
           {vertexFrame && vertexFrame.shape === 'polygon' && <VertexHandles frame={vertexFrame} scale={view.scale} />}
+          {tool === 'select' && selectedEdge && (
+            <EdgeHandles
+              edge={selectedEdge}
+              from={byId.get(selectedEdge.from) as BoxElement | undefined}
+              to={byId.get(selectedEdge.to) as BoxElement | undefined}
+              scale={view.scale}
+              toPage={toPage}
+              snapOn={snapOn}
+            />
+          )}
           {marquee && (
             <Rect
               x={Math.min(marquee.x0, marquee.x1)}
@@ -711,6 +744,192 @@ function VertexHandles({ frame, scale }: { frame: FrameEl; scale: number }) {
             useStore.getState().endGesture();
           }}
           onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = 'move')}
+          onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = '')}
+        />
+      ))}
+    </>
+  );
+}
+
+// ---------- 矢印の端点・中継点の編集 ----------
+
+type ToPage = (cx: number, cy: number) => Pt;
+type SnapOn = (evt: { ctrlKey: boolean; metaKey: boolean }) => boolean;
+
+/** ハンドルのドラッグ（ウィンドウ全体でポインタを追う） */
+function startHandleDrag(toPage: ToPage, onMove: (p: Pt, evt: PointerEvent) => void) {
+  const st = useStore.getState();
+  let moved = false;
+  const move = (evt: PointerEvent) => {
+    if (!moved) {
+      moved = true;
+      st.beginGesture();
+    }
+    onMove(toPage(evt.clientX, evt.clientY), evt);
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    if (moved) useStore.getState().endGesture();
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
+/** 点の下にある接続先（カード・枠・テキスト・画像・分岐点） */
+function nodeAt(p: Pt, scale: number, exclude: Id[]): BoxElement | undefined {
+  const els = useStore.getState().doc.elements;
+  const tol = 8 / scale;
+  for (let i = els.length - 1; i >= 0; i--) {
+    const e = els[i];
+    if (!isBox(e) || e.hidden || exclude.includes(e.id)) continue;
+    const b = boxOf(e);
+    if (e.type === 'junction') {
+      if (Math.hypot(p.x - b.x, p.y - b.y) <= tol * 1.5) return e;
+      continue;
+    }
+    if (p.x >= b.x - tol && p.x <= b.x + b.w + tol && p.y >= b.y - tol && p.y <= b.y + b.h + tol) return e;
+  }
+  return undefined;
+}
+
+function EdgeHandles(props: { edge: EdgeEl; from?: BoxElement; to?: BoxElement; scale: number; toPage: ToPage; snapOn: SnapOn }) {
+  const { edge, from, to, scale, toPage, snapOn } = props;
+  if (!from || !to || edge.locked) return null;
+  const geo = edgeGeometry(edge, from, to);
+  const key = geo.keyPoints;
+  const r = 6 / scale;
+  const st = () => useStore.getState();
+  const patch = (p: Partial<EdgeEl>) => st().updateEl(edge.id, p as Partial<Element>, { live: true });
+  const current = () => st().doc.elements.find((e) => e.id === edge.id) as EdgeEl;
+
+  // 端点：ドラッグで接続先・辺・位置を変える
+  const dragEnd = (which: 'from' | 'to') => {
+    startHandleDrag(toPage, (p, evt) => {
+      const cur = current();
+      const other = which === 'from' ? cur.to : cur.from;
+      const node = nodeAt(p, scale, [other]);
+      if (!node) return;
+      if (node.type === 'junction') {
+        patch(which === 'from' ? { from: node.id, fromSide: 'auto' } : { to: node.id, toSide: 'auto' });
+        return;
+      }
+      const b = boxOf(node);
+      let { side, offset } = nearestSide(b, p);
+      const len = side === 'left' || side === 'right' ? b.h : b.w;
+      if (snapOn(evt)) {
+        const g = st().doc.settings.gridSize;
+        const origin = side === 'left' || side === 'right' ? b.y : b.x;
+        offset = Math.max(0, Math.min(1, (snap(origin + offset * len, g) - origin) / (len || 1)));
+      }
+      if (Math.abs(offset - 0.5) * len < 6) offset = 0.5; // 中央に吸い付ける
+      offset = Math.round(offset * 1000) / 1000;
+      patch(which === 'from' ? { from: node.id, fromSide: side, fromOffset: offset } : { to: node.id, toSide: side, toOffset: offset });
+    });
+  };
+
+  // 中継点：ドラッグで移動
+  const dragWaypoint = (index: number) => {
+    startHandleDrag(toPage, (p, evt) => {
+      const g = st().doc.settings.gridSize;
+      const q = snapOn(evt) ? { x: snap(p.x, g), y: snap(p.y, g) } : { x: Math.round(p.x), y: Math.round(p.y) };
+      const wps = current().waypoints.slice();
+      wps[index] = q;
+      patch({ waypoints: wps });
+    });
+  };
+
+  // 中継点を追加する位置：直角・直線は描画中の各区間の中央、曲線は中継点どうしの中間
+  const pts = geo.points;
+  const adds: Pt[] = [];
+  if (edge.routing === 'curved') {
+    for (let k = 0; k < key.length - 1; k++) {
+      const m = { x: (key[k].x + key[k + 1].x) / 2, y: (key[k].y + key[k + 1].y) / 2 };
+      adds.push(projectOnPolyline(pts, m).point);
+    }
+  } else {
+    for (let i = 0; i < pts.length - 2; i += 2) {
+      const l = Math.hypot(pts[i + 2] - pts[i], pts[i + 3] - pts[i + 1]);
+      if (l * scale < 28) continue;
+      adds.push({ x: (pts[i] + pts[i + 2]) / 2, y: (pts[i + 1] + pts[i + 3]) / 2 });
+    }
+  }
+
+  const s0 = key[0],
+    s1 = key[key.length - 1];
+  return (
+    <>
+      {adds.map((m, i) => (
+        <Rect
+          key={'add' + i}
+          x={m.x - r * 0.75}
+          y={m.y - r * 0.75}
+          width={r * 1.5}
+          height={r * 1.5}
+          cornerRadius={r * 0.75}
+          fill="#ffffff"
+          stroke="#4f8cff"
+          strokeWidth={1.5 / scale}
+          onPointerDown={(e) => {
+            e.cancelBubble = true;
+            const cur = current();
+            const idx = insertWaypointIndex(pts, cur.waypoints, m);
+            const wps = cur.waypoints.slice();
+            wps.splice(idx, 0, { x: Math.round(m.x), y: Math.round(m.y) });
+            st().beginGesture();
+            patch({ waypoints: wps });
+            dragWaypoint(idx);
+            // 動かさずに離した場合も追加を確定する
+            const commit = () => {
+              window.removeEventListener('pointerup', commit);
+              st().endGesture();
+            };
+            window.addEventListener('pointerup', commit);
+          }}
+          onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = 'copy')}
+          onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = '')}
+        />
+      ))}
+      {edge.waypoints.map((w, i) => (
+        <Circle
+          key={'wp' + i}
+          x={w.x}
+          y={w.y}
+          radius={r}
+          fill="#4f8cff"
+          stroke="#ffffff"
+          strokeWidth={2 / scale}
+          onPointerDown={(e) => {
+            e.cancelBubble = true;
+            if (e.evt.altKey || e.evt.button === 2) {
+              st().updateEl(edge.id, { waypoints: current().waypoints.filter((_, k) => k !== i) } as Partial<Element>);
+              return;
+            }
+            dragWaypoint(i);
+          }}
+          onDblClick={() => st().updateEl(edge.id, { waypoints: current().waypoints.filter((_, k) => k !== i) } as Partial<Element>)}
+          onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = 'move')}
+          onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = '')}
+        />
+      ))}
+      {[
+        { p: s0, which: 'from' as const },
+        { p: s1, which: 'to' as const },
+      ].map(({ p, which }) => (
+        <Rect
+          key={which}
+          x={p.x - r}
+          y={p.y - r}
+          width={r * 2}
+          height={r * 2}
+          fill={which === 'from' ? '#ffffff' : '#4f8cff'}
+          stroke="#4f8cff"
+          strokeWidth={2 / scale}
+          onPointerDown={(e) => {
+            e.cancelBubble = true;
+            dragEnd(which);
+          }}
+          onMouseEnter={(e) => (e.target.getStage()!.container().style.cursor = 'crosshair')}
           onMouseLeave={(e) => (e.target.getStage()!.container().style.cursor = '')}
         />
       ))}

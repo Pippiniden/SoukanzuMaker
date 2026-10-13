@@ -91,11 +91,20 @@ export interface EdgeEl {
   to: Id;
   fromSide: Side;
   toSide: Side;
+  /** 辺上の接続位置（0〜1、0.5 = 中央）。辺を指定したときだけ有効 */
+  fromOffset: number;
+  toOffset: number;
+  /** 手動で追加した中継点（ページ座標） */
+  waypoints: { x: number; y: number }[];
   routing: Routing;
   /** 直角線の折れ位置（0〜1）／曲線の曲がり具合（-1〜1） */
   bend: number;
   stroke: string;
+  /** 始点側の太さ */
   strokeWidth: number;
+  /** 太さを変える（始点 strokeWidth → 終点 endWidth） */
+  taper: boolean;
+  endWidth: number;
   dash: Dash;
   head: ArrowHead;
   headSize: number;
@@ -128,8 +137,17 @@ export interface ImageEl extends BaseEl {
   height: number;
 }
 
-export type Element = CardEl | FrameEl | EdgeEl | TextEl | ImageEl;
-export type BoxElement = CardEl | FrameEl | TextEl | ImageEl;
+/** 矢印の分岐・合流点 */
+export interface JunctionEl extends BaseEl {
+  type: 'junction';
+  /** 点を描くか（描かない場合は画像に出ない） */
+  dot: boolean;
+  dotSize: number;
+  dotColor: string;
+}
+
+export type Element = CardEl | FrameEl | EdgeEl | TextEl | ImageEl | JunctionEl;
+export type BoxElement = CardEl | FrameEl | TextEl | ImageEl | JunctionEl;
 
 export interface DocSettings {
   gridSize: number;

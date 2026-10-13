@@ -131,7 +131,11 @@ export function Toolbar() {
       )}
       {tool === 'edge' && (
         <div className="tool-group">
-          <span className="tool-hint">{edgeFrom ? '終点をクリック（Esc で取り消し）' : '始点のカードや枠をクリック'}</span>
+          <span className="tool-hint">
+            {edgeFrom
+              ? '終点をクリック（既存の矢印をクリックすると合流）・Esc で取り消し'
+              : '始点のカードや枠をクリック（既存の矢印をクリックするとそこから分岐）'}
+          </span>
         </div>
       )}
 

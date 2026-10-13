@@ -489,3 +489,7 @@ input[type='color']:disabled {
     width: 260px;
   }
 }
+.muted-text {
+  color: var(--ink-3);
+  font-size: 12px;
+}

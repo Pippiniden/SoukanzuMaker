@@ -5,6 +5,7 @@ import type {
   FrameEl,
   Id,
   ImageEl,
+  JunctionEl,
   TextEl,
 } from './types';
 
@@ -225,10 +226,15 @@ export function makeEdge(from: Id, to: Id, over: Partial<EdgeEl> = {}): EdgeEl {
     to,
     fromSide: 'auto',
     toSide: 'auto',
+    fromOffset: 0.5,
+    toOffset: 0.5,
+    waypoints: [],
     routing: 'orthogonal',
     bend: 0.5,
     stroke: '#27a5a0',
     strokeWidth: 4,
+    taper: false,
+    endWidth: 10,
     dash: 'solid',
     head: 'end',
     headSize: 12,
@@ -239,6 +245,31 @@ export function makeEdge(from: Id, to: Id, over: Partial<EdgeEl> = {}): EdgeEl {
     labelPos: 0.5,
     labelVertical: false,
     ...over,
+  };
+}
+
+export function makeJunction(x: number, y: number, over: Partial<JunctionEl> = {}): JunctionEl {
+  return { id: newId('jct'), type: 'junction', x, y, dot: false, dotSize: 10, dotColor: '#27a5a0', ...over };
+}
+
+/** 古い保存データに新しい項目の既定値を補う */
+export function migrateDoc(doc: Doc): Doc {
+  return {
+    ...doc,
+    elements: doc.elements.map((e) => {
+      if (e.type === 'edge') {
+        return {
+          ...e,
+          fromOffset: e.fromOffset ?? 0.5,
+          toOffset: e.toOffset ?? 0.5,
+          waypoints: e.waypoints ?? [],
+          taper: e.taper ?? false,
+          endWidth: e.endWidth ?? e.strokeWidth * 2.5,
+        };
+      }
+      if (e.type === 'card') return { ...e, noImage: e.noImage ?? 'nameOnly' };
+      return e;
+    }),
   };
 }
 

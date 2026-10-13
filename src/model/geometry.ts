@@ -44,6 +44,7 @@ function approxWidth(s: string) {
 }
 
 export function boxOf(el: BoxElement): Box {
+  if (el.type === 'junction') return { x: el.x, y: el.y, w: 0, h: 0 };
   if (el.type === 'text') {
     const s = textSize(el);
     return { x: el.x, y: el.y, w: s.w, h: s.h };
@@ -161,21 +162,24 @@ export function frameContents(doc: Doc, frameId: Id): Id[] {
 
 // ---------- 矢印の経路 ----------
 
-function sidePoint(b: Box, side: Exclude<Side, 'auto'>): Pt {
+type FixedSide = Exclude<Side, 'auto'>;
+
+export function sidePoint(b: Box, side: FixedSide, offset = 0.5): Pt {
   switch (side) {
     case 'top':
-      return { x: b.x + b.w / 2, y: b.y };
+      return { x: b.x + b.w * offset, y: b.y };
     case 'bottom':
-      return { x: b.x + b.w / 2, y: b.y + b.h };
+      return { x: b.x + b.w * offset, y: b.y + b.h };
     case 'left':
-      return { x: b.x, y: b.y + b.h / 2 };
+      return { x: b.x, y: b.y + b.h * offset };
     case 'right':
-      return { x: b.x + b.w, y: b.y + b.h / 2 };
+      return { x: b.x + b.w, y: b.y + b.h * offset };
   }
 }
 
 function clipToBox(b: Box, toward: Pt, ellipse: boolean): Pt {
   const c = center(b);
+  if (b.w === 0 && b.h === 0) return c;
   const dx = toward.x - c.x,
     dy = toward.y - c.y;
   if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return c;
@@ -188,9 +192,11 @@ function clipToBox(b: Box, toward: Pt, ellipse: boolean): Pt {
   return { x: c.x + dx * s, y: c.y + dy * s };
 }
 
-const isH = (s: Side) => s === 'left' || s === 'right';
+export const isH = (s: Side) => s === 'left' || s === 'right';
+const ptBox = (p: Pt): Box => ({ x: p.x, y: p.y, w: 0, h: 0 });
+const OPPOSITE = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as const;
 
-function autoSides(a: Box, b: Box, fromSide: Side, toSide: Side): [Exclude<Side, 'auto'>, Exclude<Side, 'auto'>] {
+function autoSides(a: Box, b: Box, fromSide: Side, toSide: Side): [FixedSide, FixedSide] {
   const ca = center(a),
     cb = center(b);
   const gapX = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w));
@@ -198,17 +204,16 @@ function autoSides(a: Box, b: Box, fromSide: Side, toSide: Side): [Exclude<Side,
   const horizontal = gapX >= gapY;
   const hDir = (from: Pt, to: Pt): 'left' | 'right' => (to.x >= from.x ? 'right' : 'left');
   const vDir = (from: Pt, to: Pt): 'top' | 'bottom' => (to.y >= from.y ? 'bottom' : 'top');
-  const opposite = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as const;
 
   let fs = fromSide === 'auto' ? null : fromSide;
   let ts = toSide === 'auto' ? null : toSide;
   if (!fs && !ts) {
     fs = horizontal ? hDir(ca, cb) : vDir(ca, cb);
-    ts = opposite[fs];
+    ts = OPPOSITE[fs];
   } else if (fs && !ts) {
     const sp = sidePoint(a, fs);
-    if (isH(fs)) ts = sp.y >= b.y && sp.y <= b.y + b.h ? opposite[hDir(ca, cb)] : sp.y < b.y ? 'top' : 'bottom';
-    else ts = sp.x >= b.x && sp.x <= b.x + b.w ? opposite[vDir(ca, cb)] : sp.x < b.x ? 'left' : 'right';
+    if (isH(fs)) ts = sp.y >= b.y && sp.y <= b.y + b.h ? OPPOSITE[hDir(ca, cb)] : sp.y < b.y ? 'top' : 'bottom';
+    else ts = sp.x >= b.x && sp.x <= b.x + b.w ? OPPOSITE[vDir(ca, cb)] : sp.x < b.x ? 'left' : 'right';
   } else if (!fs && ts) {
     const tp = sidePoint(b, ts);
     if (isH(ts)) fs = tp.y >= a.y && tp.y <= a.y + a.h ? hDir(ca, cb) : tp.y < a.y ? 'top' : 'bottom';
@@ -218,22 +223,62 @@ function autoSides(a: Box, b: Box, fromSide: Side, toSide: Side): [Exclude<Side,
 }
 
 export interface EdgeGeometry {
+  /** 描画する折れ線（曲線は細かい折れ線にしたもの） */
   points: number[];
-  tension: number;
+  /** 始点・中継点・終点 */
+  keyPoints: Pt[];
+  /** 実際に使った辺 */
+  sides: [FixedSide, FixedSide];
+}
+
+/** 中継点を通る直角の経路 */
+function orthoThrough(s: Pt, startH: boolean, wps: Pt[], t: Pt, endH: boolean): Pt[] {
+  const out: Pt[] = [s];
+  let cur = s;
+  let dirH = startH;
+  const targets = [...wps, t];
+  targets.forEach((b, k) => {
+    const last = k === targets.length - 1;
+    const sameY = Math.abs(cur.y - b.y) < 0.5,
+      sameX = Math.abs(cur.x - b.x) < 0.5;
+    if (sameX || sameY) {
+      out.push(b);
+      dirH = sameY;
+    } else {
+      const firstLegH = last ? !endH : dirH;
+      const elbow = firstLegH ? { x: b.x, y: cur.y } : { x: cur.x, y: b.y };
+      out.push(elbow, b);
+      dirH = !firstLegH;
+    }
+    cur = b;
+  });
+  return out;
 }
 
 export function edgeGeometry(edge: EdgeEl, from: BoxElement, to: BoxElement): EdgeGeometry {
   const a = boxOf(from),
     b = boxOf(to);
-  const ellA = from.type === 'frame' && from.shape === 'ellipse';
-  const ellB = to.type === 'frame' && to.shape === 'ellipse';
+  const wps = edge.waypoints ?? [];
+  const nextBox = wps.length ? ptBox(wps[0]) : b;
+  const prevBox = wps.length ? ptBox(wps[wps.length - 1]) : a;
+  const fOff = edge.fromSide === 'auto' ? 0.5 : (edge.fromOffset ?? 0.5);
+  const tOff = edge.toSide === 'auto' ? 0.5 : (edge.toOffset ?? 0.5);
+
+  let fs: FixedSide, ts: FixedSide;
+  if (wps.length) {
+    fs = autoSides(a, nextBox, edge.fromSide, 'auto')[0];
+    ts = autoSides(prevBox, b, 'auto', edge.toSide)[1];
+  } else {
+    [fs, ts] = autoSides(a, b, edge.fromSide, edge.toSide);
+  }
 
   if (edge.routing === 'orthogonal') {
-    const [fs, ts] = autoSides(a, b, edge.fromSide, edge.toSide);
-    const s = sidePoint(a, fs),
-      t = sidePoint(b, ts);
+    const s = sidePoint(a, fs, fOff),
+      t = sidePoint(b, ts, tOff);
     let pts: Pt[];
-    if (isH(fs) && isH(ts)) {
+    if (wps.length) {
+      pts = orthoThrough(s, isH(fs), wps, t, isH(ts));
+    } else if (isH(fs) && isH(ts)) {
       const mx = s.x + (t.x - s.x) * edge.bend;
       pts = [s, { x: mx, y: s.y }, { x: mx, y: t.y }, t];
     } else if (!isH(fs) && !isH(ts)) {
@@ -244,54 +289,154 @@ export function edgeGeometry(edge: EdgeEl, from: BoxElement, to: BoxElement): Ed
     } else {
       pts = [s, { x: s.x, y: t.y }, t];
     }
-    return { points: dedupe(pts), tension: 0 };
+    return { points: flatten(dedupe(pts)), keyPoints: [s, ...wps, t], sides: [fs, ts] };
   }
 
-  const s = edge.fromSide === 'auto' ? clipToBox(a, center(b), ellA) : sidePoint(a, edge.fromSide);
-  const t = edge.toSide === 'auto' ? clipToBox(b, center(a), ellB) : sidePoint(b, edge.toSide);
+  const ellA = from.type === 'frame' && from.shape === 'ellipse';
+  const ellB = to.type === 'frame' && to.shape === 'ellipse';
+  const s = edge.fromSide === 'auto' ? clipToBox(a, center(nextBox), ellA) : sidePoint(a, edge.fromSide, fOff);
+  const t = edge.toSide === 'auto' ? clipToBox(b, center(prevBox), ellB) : sidePoint(b, edge.toSide, tOff);
+  const key = [s, ...wps, t];
+
   if (edge.routing === 'curved') {
-    const curv = (edge.bend - 0.5) * 2; // -1〜1
-    const mx = (s.x + t.x) / 2,
-      my = (s.y + t.y) / 2;
-    const dx = t.x - s.x,
-      dy = t.y - s.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const off = curv * len * 0.4;
-    const m = { x: mx - (dy / len) * off, y: my + (dx / len) * off };
-    return { points: [s.x, s.y, m.x, m.y, t.x, t.y], tension: 0.5 };
+    let through = key;
+    if (!wps.length) {
+      const curv = (edge.bend - 0.5) * 2; // -1〜1
+      const dx = t.x - s.x,
+        dy = t.y - s.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const off = curv * len * 0.4;
+      through = [s, { x: (s.x + t.x) / 2 - (dy / len) * off, y: (s.y + t.y) / 2 + (dx / len) * off }, t];
+    }
+    return { points: flatten(sampleSpline(through, 0.5)), keyPoints: key, sides: [fs, ts] };
   }
-  return { points: [s.x, s.y, t.x, t.y], tension: 0 };
+  return { points: flatten(dedupe(key)), keyPoints: key, sides: [fs, ts] };
 }
 
-function dedupe(pts: Pt[]): number[] {
+function flatten(pts: Pt[]): number[] {
   const out: number[] = [];
-  let last: Pt | null = null;
-  for (const p of pts) {
-    if (last && Math.abs(last.x - p.x) < 0.01 && Math.abs(last.y - p.y) < 0.01) continue;
-    out.push(p.x, p.y);
-    last = p;
-  }
+  for (const p of pts) out.push(p.x, p.y);
   if (out.length < 4) out.push(out[0] + 0.01, out[1]);
   return out;
 }
 
+function dedupe(pts: Pt[]): Pt[] {
+  const out: Pt[] = [];
+  for (const p of pts) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.x - p.x) < 0.01 && Math.abs(last.y - p.y) < 0.01) continue;
+    out.push(p);
+  }
+  // 一直線上の中間点を取り除く
+  for (let i = out.length - 2; i > 0; i--) {
+    const a = out[i - 1],
+      b = out[i],
+      c = out[i + 1];
+    if ((Math.abs(a.x - b.x) < 0.01 && Math.abs(b.x - c.x) < 0.01) || (Math.abs(a.y - b.y) < 0.01 && Math.abs(b.y - c.y) < 0.01)) {
+      const dot = (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y);
+      if (dot >= 0) out.splice(i, 1);
+    }
+  }
+  return out;
+}
+
+/** Konva と同じ方式の張力付き曲線を細かい折れ線にする */
+export function sampleSpline(pts: Pt[], tension: number, steps = 18): Pt[] {
+  if (pts.length < 3) return pts;
+  const cps: [Pt, Pt][] = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1],
+      p1 = pts[i],
+      p2 = pts[i + 1];
+    const d01 = Math.hypot(p1.x - p0.x, p1.y - p0.y),
+      d12 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const sum = d01 + d12 || 1;
+    const fa = (tension * d01) / sum,
+      fb = (tension * d12) / sum;
+    cps[i] = [
+      { x: p1.x - fa * (p2.x - p0.x), y: p1.y - fa * (p2.y - p0.y) },
+      { x: p1.x + fb * (p2.x - p0.x), y: p1.y + fb * (p2.y - p0.y) },
+    ];
+  }
+  const out: Pt[] = [pts[0]];
+  const quad = (a: Pt, c: Pt, b: Pt) => {
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps,
+        u = 1 - t;
+      out.push({ x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y });
+    }
+  };
+  const cubic = (a: Pt, c1: Pt, c2: Pt, b: Pt) => {
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps,
+        u = 1 - t;
+      out.push({
+        x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
+        y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
+      });
+    }
+  };
+  const n = pts.length;
+  quad(pts[0], cps[1][0], pts[1]);
+  for (let i = 1; i < n - 2; i++) cubic(pts[i], cps[i][1], cps[i + 1][0], pts[i + 1]);
+  quad(pts[n - 2], cps[n - 2][1], pts[n - 1]);
+  return out;
+}
+
+export function polylineLength(points: number[]) {
+  let total = 0;
+  for (let i = 0; i < points.length - 2; i += 2) total += Math.hypot(points[i + 2] - points[i], points[i + 3] - points[i + 1]);
+  return total;
+}
+
 /** 折れ線上の割合 t の位置 */
 export function pointAlong(points: number[], t: number): Pt {
-  const segs: number[] = [];
-  let total = 0;
+  return pointAtDistance(points, Math.max(0, Math.min(1, t)) * polylineLength(points));
+}
+
+export function pointAtDistance(points: number[], d: number): Pt {
+  let rest = Math.max(0, d);
   for (let i = 0; i < points.length - 2; i += 2) {
     const l = Math.hypot(points[i + 2] - points[i], points[i + 3] - points[i + 1]);
-    segs.push(l);
-    total += l;
-  }
-  let d = Math.max(0, Math.min(1, t)) * total;
-  for (let k = 0; k < segs.length; k++) {
-    if (d <= segs[k] || k === segs.length - 1) {
-      const r = segs[k] ? d / segs[k] : 0;
-      const i = k * 2;
+    if (rest <= l || i >= points.length - 4) {
+      const r = l ? Math.min(1, rest / l) : 0;
       return { x: points[i] + (points[i + 2] - points[i]) * r, y: points[i + 1] + (points[i + 3] - points[i + 1]) * r };
     }
-    d -= segs[k];
+    rest -= l;
   }
   return { x: points[0], y: points[1] };
+}
+
+/** 折れ線上で点 p に最も近い位置 */
+export function projectOnPolyline(points: number[], p: Pt): { point: Pt; along: number; seg: number; distance: number } {
+  let best = { point: { x: points[0], y: points[1] }, along: 0, seg: 0, distance: Infinity };
+  let acc = 0;
+  for (let i = 0; i < points.length - 2; i += 2) {
+    const ax = points[i],
+      ay = points[i + 1],
+      bx = points[i + 2],
+      by = points[i + 3];
+    const dx = bx - ax,
+      dy = by - ay;
+    const l2 = dx * dx + dy * dy;
+    const r = l2 ? Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy) / l2)) : 0;
+    const q = { x: ax + dx * r, y: ay + dy * r };
+    const dist = Math.hypot(p.x - q.x, p.y - q.y);
+    if (dist < best.distance) best = { point: q, along: acc + Math.sqrt(l2) * r, seg: i / 2, distance: dist };
+    acc += Math.sqrt(l2);
+  }
+  return best;
+}
+
+/** 箱の辺のうち点に最も近いものと、その辺上の位置（0〜1） */
+export function nearestSide(b: Box, p: Pt): { side: FixedSide; offset: number } {
+  const d = {
+    top: Math.abs(p.y - b.y),
+    bottom: Math.abs(p.y - (b.y + b.h)),
+    left: Math.abs(p.x - b.x),
+    right: Math.abs(p.x - (b.x + b.w)),
+  };
+  const side = (Object.keys(d) as FixedSide[]).reduce((m, k) => (d[k] < d[m] ? k : m), 'top');
+  const raw = isH(side) ? (p.y - b.y) / (b.h || 1) : (p.x - b.x) / (b.w || 1);
+  return { side, offset: Math.max(0, Math.min(1, raw)) };
 }

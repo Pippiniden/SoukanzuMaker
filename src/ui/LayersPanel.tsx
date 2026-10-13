@@ -8,6 +8,7 @@ const TYPE_ICON: Record<Element['type'], string> = {
   edge: '→',
   text: '文',
   image: '画',
+  junction: '点',
 };
 
 export function LayersPanel() {

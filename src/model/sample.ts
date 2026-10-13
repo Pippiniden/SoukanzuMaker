@@ -1,5 +1,5 @@
 import type { CardEl, Doc, EdgeEl, Element } from './types';
-import { CARD_PRESETS, EDGE_PRESETS, FRAME_PRESETS, emptyDoc, makeCard, makeEdge, makeFrame, makeText } from './defaults';
+import { CARD_PRESETS, EDGE_PRESETS, FRAME_PRESETS, emptyDoc, makeCard, makeEdge, makeFrame, makeJunction, makeText } from './defaults';
 
 /** 初回起動時に表示するサンプル（登場人物はすべて架空） */
 export function sampleDoc(): Doc {
@@ -76,18 +76,24 @@ export function sampleDoc(): Doc {
     width: 820,
   });
 
+  const branch = makeJunction(840, 310);
   const oneway = EDGE_PRESETS.find((p) => p.key === 'oneway')!.style;
   const e = (from: { id: string }, to: { id: string }, label: string, over: Partial<EdgeEl> = {}) =>
     makeEdge(from.id, to.id, { label, ...over });
 
   const edges: EdgeEl[] = [
-    e(kiryu, kishida, '信頼', { fromSide: 'top', toSide: 'left', labelPos: 0.3 }),
-    e(takamura, law, '再建依頼', { fromSide: 'left', toSide: 'right', routing: 'straight' }),
+    e(kiryu, kishida, '信頼', { fromSide: 'top', fromOffset: 0.27, toSide: 'left', labelPos: 0.3 }),
+    // 分岐：教頭 → 分岐点 → 二人の弁護士
+    e(takamura, branch, '再建依頼', { fromSide: 'left', toSide: 'right', head: 'none', labelVertical: true, labelPos: 0.5 }),
+    e(branch, kiryu, '', { fromSide: 'left', toSide: 'top' }),
+    e(branch, miyashita, '', { fromSide: 'left', toSide: 'top' }),
     e(kiryu, miyashita, '元教え子', { fromSide: 'right', toSide: 'left', labelPos: 0.5, labelBg: '#1f3a68', labelColor: '#7fe0d8' }),
     e(miyashita, kiryu, '感謝', { routing: 'curved', bend: 0.2, fromSide: 'bottom', toSide: 'bottom', labelBg: '#1f3a68', labelColor: '#7fe0d8' }),
-    e(kiryu, yonekura, '元教え子', { fromSide: 'left', toSide: 'right', bend: 0.3 }),
+    // 太さが変わる矢印
+    e(kiryu, yonekura, '元教え子', { fromSide: 'left', toSide: 'right', bend: 0.3, taper: true, strokeWidth: 3, endWidth: 9 }),
     e(father, kaede, '親子', { head: 'both', fromSide: 'bottom', toSide: 'left' }),
-    e(amano, brother, '兄弟', { fromSide: 'bottom', toSide: 'top', labelPos: 0.45 }),
+    // 折れ点を手で置いた矢印
+    e(amano, brother, '兄弟', { fromSide: 'bottom', toSide: 'top', labelPos: 0.45, waypoints: [{ x: 300, y: 1060 }] }),
     e(takamura, nose, '親子', { head: 'both', fromSide: 'bottom', toSide: 'bottom', bend: 0.5, routing: 'curved' }),
     e(hayami, segawa, '片想い', { ...oneway, routing: 'curved', bend: 0.8, fromSide: 'top', toSide: 'top' }),
   ];
@@ -123,6 +129,7 @@ export function sampleDoc(): Doc {
     brother,
     note,
     ...edges,
+    branch,
   ];
 
   return { ...emptyDoc(), title: '青葉学園 人物相関図', background: '#fff7fa', background2: '#ffffff', elements };
