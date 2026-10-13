@@ -8,6 +8,7 @@ import { loadSaved, startAutosave } from './io/persist';
 import { sampleDoc } from './model/sample';
 import { fileToDataUrl } from './io/image';
 import { makeImage } from './model/defaults';
+import { loadDocFonts } from './io/fontUsage';
 import type { Element } from './model/types';
 import { shiftWaypoints, waypointStarts } from './model/edgeOps';
 
@@ -35,10 +36,18 @@ export function App() {
     const bump = () => useStore.setState((s) => ({ fontEpoch: s.fontEpoch + 1 }));
     document.fonts?.ready.then(bump);
     document.fonts?.addEventListener('loadingdone', bump);
-    // キャンバスで使う文字のフォントを先に読み込ませる
-    document.fonts?.load('bold 16px "Noto Sans JP"', 'あ漢字');
-    document.fonts?.load('16px "Noto Sans JP"', 'あ漢字');
-    return () => document.fonts?.removeEventListener('loadingdone', bump);
+    // 使っている文字のフォントを読み込む（文字が変わるたびに必要な分だけ）
+    let timer: number | undefined;
+    loadDocFonts(useStore.getState().doc);
+    const unsub = useStore.subscribe((s, prev) => {
+      if (s.doc.elements === prev.doc.elements) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => loadDocFonts(useStore.getState().doc), 150);
+    });
+    return () => {
+      unsub();
+      document.fonts?.removeEventListener('loadingdone', bump);
+    };
   }, []);
 
   useShortcuts();
@@ -124,6 +133,7 @@ function useShortcuts() {
       if (k === 'escape') {
         if (st.edgeFrom) st.set({ edgeFrom: null, edgeStyle: {} });
         else if (st.vertexEdit) st.set({ vertexEdit: null });
+        else if (st.photoEdit) st.set({ photoEdit: null });
         else if (st.tool !== 'select') st.setTool('select');
         else st.setSelection([]);
         return;

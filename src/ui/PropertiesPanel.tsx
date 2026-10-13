@@ -8,7 +8,10 @@ import {
   POLYGON_TEMPLATES,
 } from '../model/defaults';
 import { boxOf, isBox, normalizePolygon } from '../model/geometry';
-import { Check, ColorInput, NumberInput, Row, Section, Seg, Select, Slider, TextArea, TextInput } from './controls';
+import { Check, ColorInput, FontSelect, NumberInput, Row, Section, Seg, Select, Slider, TextArea, TextInput } from './controls';
+import { alignTo, arrangeWithGap, centerInFrame, fitFrameAround, fitFrameToContents, matchSize, type AlignMode, type AlignRef } from '../model/fit';
+import { autoTextArea } from '../canvas/cardLayout';
+import { useState } from 'react';
 import { fileToDataUrl, loadImage, pickFiles } from '../io/image';
 
 const DASH_OPTIONS: { value: Dash; label: string }[] = [
@@ -92,7 +95,43 @@ function DocProps({ doc }: { doc: Doc }) {
             onChange={(v) => patchDoc((d) => ({ settings: { ...d.settings, gridSize: Math.max(4, v) } }))}
           />
         </Row>
-        <p className="hint">ドラッグ中に Ctrl（Mac は ⌘）を押すと、吸着の ON/OFF を一時的に切り替えられます。</p>
+        <Row label="太線">
+          <span className="color-input">
+            <NumberInput
+              value={doc.settings.majorEvery}
+              min={0}
+              max={50}
+              onChange={(v) => patchDoc((d) => ({ settings: { ...d.settings, majorEvery: Math.max(0, Math.round(v)) } }))}
+            />
+            <span className="muted-text">マスごと（0で非表示）</span>
+          </span>
+        </Row>
+        <Row label="整列ガイド">
+          <Check
+            checked={doc.settings.guides}
+            onChange={(v) => patchDoc((d) => ({ settings: { ...d.settings, guides: v } }))}
+            label="他の要素の端・中央に吸い付ける"
+          />
+        </Row>
+        <p className="hint">ドラッグ中に Ctrl（Mac は ⌘）でグリッド吸着を一時的に切り替え、Alt を押すと整列ガイドなしで動かせます（枠は中身を残して枠だけ動きます）。</p>
+      </Section>
+      <Section title="文字">
+        <Row label="フォント">
+          <FontSelect value={doc.settings.font} onChange={(v) => patchDoc((d) => ({ settings: { ...d.settings, font: v } }))} />
+        </Row>
+        <p className="hint">新しく作るカード・枠・矢印・テキストに使われます。</p>
+        <button
+          type="button"
+          onClick={() => {
+            const f = doc.settings.font;
+            useStore.getState().commit((d) => ({
+              ...d,
+              elements: d.elements.map((e) => (e.type === 'edge' ? { ...e, labelFont: f } : e.type === 'junction' || e.type === 'image' ? e : { ...e, font: f })),
+            }));
+          }}
+        >
+          すべての要素をこのフォントにする
+        </button>
       </Section>
       <Section title="使い方">
         <ul className="hint-list">
@@ -169,6 +208,31 @@ function CardProps({ el, p }: { el: CardEl; p: P }) {
           </span>
         </Row>
       </Section>
+      <Section title="文字">
+        <Row label="フォント">
+          <FontSelect value={el.font} onChange={(v) => p({ font: v })} />
+        </Row>
+        {el.layout !== 'nameOnly' && el.layout !== 'inline' && (
+          <Row label="文字エリア">
+            <span className="color-input">
+              <Check checked={el.textArea === 0} onChange={(v) => p({ textArea: v ? 0 : Math.round(autoTextArea(el)) })} label="自動" />
+              {el.textArea > 0 && (
+                <Slider value={el.textArea} min={16} max={Math.max(40, el.height - 20)} step={1} onChange={(v) => p({ textArea: v })} />
+              )}
+            </span>
+          </Row>
+        )}
+        <Row label="名札の帯">
+          <ColorInput value={el.textBg} onChange={(v) => p({ textBg: v })} allowNone />
+        </Row>
+        <Row label="バッジの文字">
+          <span className="color-input">
+            <ColorInput value={el.badgeColor} onChange={(v) => p({ badgeColor: v })} />
+            <NumberInput value={el.badgeSize} min={6} max={60} onChange={(v) => p({ badgeSize: v })} />
+          </span>
+        </Row>
+        <p className="hint">文字エリアを高くすると、長い名前は2行に折り返されます。</p>
+      </Section>
       <Section title="表示形式">
         <Seg
           value={el.layout}
@@ -200,6 +264,14 @@ function CardProps({ el, p }: { el: CardEl; p: P }) {
         </Row>
         {hasImage ? (
           <>
+            <Row label="位置合わせ">
+              <span className="btn-row">
+                <PhotoEditButton id={el.id} />
+                <button type="button" onClick={() => p({ imageFocusX: 0.5, imageFocusY: 0.5, imageZoom: 1 })}>
+                  中央に戻す
+                </button>
+              </span>
+            </Row>
             <Row label="拡大">
               <Slider value={el.imageZoom} min={1} max={3} onChange={(v) => p({ imageZoom: v })} />
             </Row>
@@ -285,12 +357,33 @@ function FrameProps({ el, p }: { el: FrameEl; p: P }) {
             value={el.titlePos}
             onChange={(v) => p({ titlePos: v })}
             options={[
-              { value: 'insideTopLeft', label: '内側の左上' },
+              { value: 'insideTopLeft', label: '内側の上' },
               { value: 'onTopEdge', label: '上辺に重ねる' },
-              { value: 'outsideTopLeft', label: '外側の左上' },
+              { value: 'outsideTopLeft', label: '外側の上' },
+              { value: 'insideBottom', label: '内側の下' },
               { value: 'none', label: '表示しない' },
             ]}
           />
+        </Row>
+        <Row label="寄せ">
+          <Seg
+            value={el.titleAlign}
+            onChange={(v) => p({ titleAlign: v })}
+            options={[
+              { value: 'left', label: '左' },
+              { value: 'center', label: '中央' },
+              { value: 'right', label: '右' },
+            ]}
+          />
+        </Row>
+        <Row label="微調整 X / Y">
+          <span className="pair">
+            <NumberInput value={el.titleDx} onChange={(v) => p({ titleDx: v })} />
+            <NumberInput value={el.titleDy} onChange={(v) => p({ titleDy: v })} />
+          </span>
+        </Row>
+        <Row label="フォント">
+          <FontSelect value={el.font} onChange={(v) => p({ font: v })} />
         </Row>
         <Row label="見出しの文字">
           <span className="color-input">
@@ -298,10 +391,14 @@ function FrameProps({ el, p }: { el: FrameEl; p: P }) {
             <NumberInput value={el.titleSize} min={8} max={80} onChange={(v) => p({ titleSize: v })} />
           </span>
         </Row>
+        <Row label="英字サブの大きさ">
+          <NumberInput value={el.subtitleSize} min={6} max={60} onChange={(v) => p({ subtitleSize: v })} />
+        </Row>
         <Row label="見出しの背景">
           <ColorInput value={el.titleBg} onChange={(v) => p({ titleBg: v })} allowNone />
         </Row>
       </Section>
+      <FrameFit el={el} />
       <Section title="形">
         <Seg
           value={el.shape}
@@ -485,6 +582,9 @@ function EdgeProps({ el, p }: { el: EdgeEl; p: P }) {
         </Row>
       </Section>
       <Section title="ラベル">
+        <Row label="フォント">
+          <FontSelect value={el.labelFont} onChange={(v) => p({ labelFont: v })} />
+        </Row>
         <Row label="文字">
           <span className="color-input">
             <ColorInput value={el.labelColor} onChange={(v) => p({ labelColor: v })} />
@@ -502,6 +602,36 @@ function EdgeProps({ el, p }: { el: EdgeEl; p: P }) {
         </Row>
       </Section>
     </>
+  );
+}
+
+function PhotoEditButton({ id }: { id: Id }) {
+  const editing = useStore((s) => s.photoEdit === id);
+  return (
+    <button type="button" className={editing ? 'primary' : ''} onClick={() => useStore.getState().set({ photoEdit: editing ? null : id })}>
+      {editing ? '完了' : '写真を動かす'}
+    </button>
+  );
+}
+
+function FrameFit({ el }: { el: FrameEl }) {
+  const [pad, setPad] = useState(30);
+  const st = useStore.getState();
+  return (
+    <Section title="大きさを合わせる">
+      <Row label="余白(px)">
+        <NumberInput value={pad} min={0} max={200} onChange={setPad} />
+      </Row>
+      <div className="btn-grid">
+        <button type="button" onClick={() => st.commit((d) => fitFrameToContents(d, el.id, pad))}>
+          中身に合わせる
+        </button>
+        <button type="button" onClick={() => st.commit((d) => alignTo(d, [el.id], 'hcenter', 'page'))}>
+          キャンバスの左右中央へ
+        </button>
+      </div>
+      <p className="hint">枠の中にあるカードがちょうど収まる大きさにします。見出しの分の余白も取ります。</p>
+    </Section>
   );
 }
 
@@ -524,6 +654,9 @@ function TextProps({ el, p }: { el: TextEl; p: P }) {
   return (
     <Section title="テキスト">
       <TextArea value={el.text} onChange={(v) => p({ text: v })} autoFocusKey />
+      <Row label="フォント">
+        <FontSelect value={el.font} onChange={(v) => p({ font: v })} />
+      </Row>
       <Row label="文字">
         <span className="color-input">
           <ColorInput value={el.fill} onChange={(v) => p({ fill: v })} />
@@ -661,29 +794,14 @@ function MultiProps({ els }: { els: Element[] }) {
   const types = new Set(els.map((e) => e.type));
   const onlyType = types.size === 1 ? els[0].type : null;
 
-  const align = (mode: 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom') => {
-    const bs = boxes.map(boxOf);
-    const minX = Math.min(...bs.map((b) => b.x)),
-      maxX = Math.max(...bs.map((b) => b.x + b.w));
-    const minY = Math.min(...bs.map((b) => b.y)),
-      maxY = Math.max(...bs.map((b) => b.y + b.h));
-    const map = new Map(boxes.map((e, i) => [e.id, bs[i]]));
-    useStore.getState().commit((d) => ({
-      ...d,
-      elements: d.elements.map((e) => {
-        const b = map.get(e.id);
-        if (!b || e.locked) return e;
-        const patch =
-          mode === 'left' ? { x: minX } :
-          mode === 'right' ? { x: maxX - b.w } :
-          mode === 'hcenter' ? { x: (minX + maxX) / 2 - b.w / 2 } :
-          mode === 'top' ? { y: minY } :
-          mode === 'bottom' ? { y: maxY - b.h } :
-          { y: (minY + maxY) / 2 - b.h / 2 };
-        return { ...e, ...patch } as Element;
-      }),
-    }));
-  };
+  const [ref, setRef] = useState<AlignRef>('selection');
+  const [gap, setGap] = useState(20);
+  const [pad, setPad] = useState(30);
+  const align = (mode: AlignMode) => useStore.getState().commit((d) => alignTo(d, ids, mode, ref));
+  const frames = els.filter((e): e is FrameEl => e.type === 'frame');
+  // 枠が1つだけ選ばれていれば、他の要素をその枠に合わせられる
+  const frame = frames.length === 1 ? frames[0] : null;
+  const others = ids.filter((id) => id !== frame?.id);
 
   const distribute = (axis: 'x' | 'y') => {
     const items = boxes.map((e) => ({ e, b: boxOf(e) })).sort((a, c) => (axis === 'x' ? a.b.x - c.b.x : a.b.y - c.b.y));
@@ -705,22 +823,20 @@ function MultiProps({ els }: { els: Element[] }) {
     }));
   };
 
-  const sameSize = () => {
-    const ref = boxes[0];
-    if (!ref || !('height' in ref)) return;
-    useStore.getState().commit((d) => ({
-      ...d,
-      elements: d.elements.map((e) =>
-        ids.includes(e.id) && (e.type === 'card' || e.type === 'image' || (e.type === 'frame' && e.shape !== 'polygon'))
-          ? ({ ...e, width: ref.width, height: (ref as CardEl).height } as Element)
-          : e,
-      ),
-    }));
-  };
-
   return (
     <>
       <Section title={`${els.length}個を選択中`}>
+        <Row label="揃える基準">
+          <Select
+            value={ref}
+            onChange={setRef}
+            options={[
+              { value: 'selection', label: '選択範囲全体' },
+              { value: 'first', label: '最初に選んだ要素' },
+              { value: 'page', label: 'キャンバス' },
+            ]}
+          />
+        </Row>
         <div className="btn-grid three">
           <button type="button" onClick={() => align('left')}>左揃え</button>
           <button type="button" onClick={() => align('hcenter')}>左右中央</button>
@@ -730,9 +846,46 @@ function MultiProps({ els }: { els: Element[] }) {
           <button type="button" onClick={() => align('bottom')}>下揃え</button>
           <button type="button" onClick={() => distribute('x')}>横に等間隔</button>
           <button type="button" onClick={() => distribute('y')}>縦に等間隔</button>
-          <button type="button" onClick={sameSize} title="最初に選んだ要素のサイズに揃える">同じサイズ</button>
         </div>
       </Section>
+      <Section title="サイズ・間隔を合わせる">
+        <div className="btn-grid three">
+          <button type="button" onClick={() => useStore.getState().commit((d) => matchSize(d, ids, 'width'))}>幅を合わせる</button>
+          <button type="button" onClick={() => useStore.getState().commit((d) => matchSize(d, ids, 'height'))}>高さを合わせる</button>
+          <button type="button" onClick={() => useStore.getState().commit((d) => matchSize(d, ids, 'both'))}>両方合わせる</button>
+        </div>
+        <p className="hint">最初に選んだ要素の大きさに合わせます。</p>
+        <Row label="間隔(px)">
+          <span className="color-input">
+            <NumberInput value={gap} min={-200} max={500} onChange={setGap} />
+            <button type="button" onClick={() => useStore.getState().commit((d) => arrangeWithGap(d, ids, 'x', gap))}>横に並べる</button>
+            <button type="button" onClick={() => useStore.getState().commit((d) => arrangeWithGap(d, ids, 'y', gap))}>縦に並べる</button>
+          </span>
+        </Row>
+      </Section>
+      {frame && others.length > 0 && (
+        <Section title={`枠「${frame.title || '枠'}」に合わせる`}>
+          <Row label="余白(px)">
+            <NumberInput value={pad} min={0} max={200} onChange={setPad} />
+          </Row>
+          <div className="btn-grid">
+            <button type="button" onClick={() => useStore.getState().commit((d) => fitFrameAround(d, frame.id, others, pad))}>
+              枠をこれらに合わせる
+            </button>
+            <button type="button" onClick={() => useStore.getState().commit((d) => centerInFrame(d, frame.id, others))}>
+              枠の中央に置く
+            </button>
+          </div>
+        </Section>
+      )}
+      {els.some((e) => e.type !== 'image' && e.type !== 'junction') && (
+        <Section title="フォントを一括変更">
+          <FontSelect
+            value={(els.find((e) => 'font' in e) as { font?: string } | undefined)?.font ?? 'gothic'}
+            onChange={(f) => patchEls(ids, (e) => (e.type === 'edge' ? { labelFont: f } : e.type === 'junction' || e.type === 'image' ? {} : { font: f }) as Partial<Element>)}
+          />
+        </Section>
+      )}
       {onlyType === 'card' && (
         <Section title="カードのスタイルを一括変更">
           <PresetButtons<CardEl> presets={CARD_PRESETS} onPick={(s) => patchEls(ids, s as Partial<Element>)} />

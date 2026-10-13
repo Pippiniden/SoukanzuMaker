@@ -1,12 +1,13 @@
-import { FONT_FAMILY } from '../model/defaults';
+import { boldStyle, fontStack } from '../model/fonts';
 
 let ctx: CanvasRenderingContext2D | null = null;
 
 /** 文字列の描画幅を測る */
-export function measureText(text: string, size: number, bold = false): number {
+export function measureText(text: string, size: number, bold = false, font?: string): number {
   if (!ctx) ctx = document.createElement('canvas').getContext('2d');
   if (!ctx) return text.length * size;
-  ctx.font = `${bold ? 'bold ' : ''}${size}px ${FONT_FAMILY}`;
+  const weight = boldStyle(font, bold);
+  ctx.font = `${weight === 'normal' ? '' : weight + ' '}${size}px ${fontStack(font)}`;
   return Math.max(...text.split('\n').map((l) => ctx!.measureText(l).width), 0);
 }
 

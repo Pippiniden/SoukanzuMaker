@@ -9,6 +9,8 @@ import type {
   TextEl,
 } from './types';
 
+import { DEFAULT_FONT } from './fonts';
+
 export const FONT_FAMILY =
   "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif";
 
@@ -138,11 +140,15 @@ export function makeCard(x: number, y: number, over: Partial<CardEl> = {}): Card
     imageZoom: 1,
     imageFocusX: 0.5,
     imageFocusY: 0.35,
-    title: '名前',
-    subtitle: '',
+    title: '星野 ひかり',
+    subtitle: '2年A組',
+    font: DEFAULT_FONT,
+    textArea: 0,
+    textBg: 'transparent',
     badge: '',
     badgeFill: '#27a5a0',
     badgeColor: '#ffffff',
+    badgeSize: 14,
     fill: '#ffffff',
     stroke: '#d9dde3',
     strokeWidth: 1,
@@ -185,9 +191,14 @@ export function makeFrame(
     strokeWidth: 2,
     dash: 'solid',
     cornerRadius: 0,
-    title: '組織名',
-    subtitle: '',
+    title: '2年A組',
+    subtitle: 'CLASS 2-A',
     titlePos: 'insideTopLeft',
+    titleAlign: 'left',
+    titleDx: 0,
+    titleDy: 0,
+    subtitleSize: 10,
+    font: DEFAULT_FONT,
     titleColor: '#1f3a68',
     titleSize: 20,
     titleBg: '#ffffff',
@@ -201,7 +212,8 @@ export function makeText(x: number, y: number, over: Partial<TextEl> = {}): Text
     type: 'text',
     x,
     y,
-    text: 'テキスト',
+    text: '学園 人物相関図',
+    font: DEFAULT_FONT,
     width: 200,
     fontSize: 20,
     fill: '#1d2330',
@@ -241,6 +253,7 @@ export function makeEdge(from: Id, to: Id, over: Partial<EdgeEl> = {}): EdgeEl {
     label: '',
     labelColor: '#27a5a0',
     labelSize: 15,
+    labelFont: DEFAULT_FONT,
     labelBg: '#ffffff',
     labelPos: 0.5,
     labelVertical: false,
@@ -256,6 +269,7 @@ export function makeJunction(x: number, y: number, over: Partial<JunctionEl> = {
 export function migrateDoc(doc: Doc): Doc {
   return {
     ...doc,
+    settings: { ...emptyDoc().settings, ...doc.settings },
     elements: doc.elements.map((e) => {
       if (e.type === 'edge') {
         return {
@@ -265,9 +279,28 @@ export function migrateDoc(doc: Doc): Doc {
           waypoints: e.waypoints ?? [],
           taper: e.taper ?? false,
           endWidth: e.endWidth ?? e.strokeWidth * 2.5,
+          labelFont: e.labelFont ?? DEFAULT_FONT,
         };
       }
-      if (e.type === 'card') return { ...e, noImage: e.noImage ?? 'nameOnly' };
+      if (e.type === 'card')
+        return {
+          ...e,
+          noImage: e.noImage ?? 'nameOnly',
+          font: e.font ?? DEFAULT_FONT,
+          textArea: e.textArea ?? 0,
+          textBg: e.textBg ?? 'transparent',
+          badgeSize: e.badgeSize ?? 14,
+        };
+      if (e.type === 'frame')
+        return {
+          ...e,
+          titleAlign: e.titleAlign ?? 'left',
+          titleDx: e.titleDx ?? 0,
+          titleDy: e.titleDy ?? 0,
+          subtitleSize: e.subtitleSize ?? Math.max(9, Math.round(e.titleSize * 0.5)),
+          font: e.font ?? DEFAULT_FONT,
+        };
+      if (e.type === 'text') return { ...e, font: e.font ?? DEFAULT_FONT };
       return e;
     }),
   };
@@ -285,11 +318,11 @@ export const CANVAS_PRESETS = [
 export function emptyDoc(): Doc {
   return {
     version: 1,
-    title: '無題の相関図',
+    title: '学園 人物相関図',
     width: 1200,
     height: 1500,
     background: '#ffffff',
     elements: [],
-    settings: { gridSize: 20, showGrid: true, snap: true },
+    settings: { gridSize: 20, showGrid: true, snap: true, majorEvery: 5, guides: true, font: DEFAULT_FONT },
   };
 }

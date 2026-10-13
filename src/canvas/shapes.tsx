@@ -2,7 +2,8 @@ import { Circle, Ellipse, Group, Image as KImage, Label, Line, Rect, Shape, Tag,
 import type Konva from 'konva';
 import useImage from 'use-image';
 import type { BoxElement, CardEl, EdgeEl, FrameEl, ImageEl, JunctionEl, TextEl } from '../model/types';
-import { FONT_FAMILY } from '../model/defaults';
+import { boldStyle, fontStack } from '../model/fonts';
+import { cardLayout } from './cardLayout';
 import { edgeGeometry, pointAlong, textSize } from '../model/geometry';
 import { dashArray, measureText, toVertical } from './text';
 import { drawEdge } from './edgeDraw';
@@ -43,7 +44,7 @@ function CoverImage(props: {
   return <KImage image={img} x={props.x} y={props.y} width={w} height={h} crop={crop} listening={false} />;
 }
 
-function Placeholder({ x, y, w, h, title, round }: { x: number; y: number; w: number; h: number; title: string; round?: boolean }) {
+function Placeholder({ x, y, w, h, title, round, font }: { x: number; y: number; w: number; h: number; title: string; round?: boolean; font: string }) {
   const ch = [...(title || '?')][0];
   const size = Math.min(w, h) * 0.45;
   return (
@@ -60,8 +61,8 @@ function Placeholder({ x, y, w, h, title, round }: { x: number; y: number; w: nu
         align="center"
         text={ch}
         fontSize={size}
-        fontStyle="bold"
-        fontFamily={FONT_FAMILY}
+        fontStyle={boldStyle(font, true)}
+        fontFamily={fontStack(font)}
         fill="#9aa4b4"
       />
     </Group>
@@ -73,89 +74,23 @@ function Placeholder({ x, y, w, h, title, round }: { x: number; y: number; w: nu
 export function CardShape({ el, src, h: handlers }: { el: CardEl; src?: string; h: ShapeHandlers }) {
   const { width: w, height: h } = el;
   const hasImage = !!src;
-  const layout = !hasImage && el.noImage === 'nameOnly' ? 'nameOnly' : el.layout;
-  const textH = el.titleSize * 1.35 + (el.subtitle ? el.subtitleSize * 1.5 : 0) + 10;
+  const L = cardLayout(el, hasImage);
   const r = el.cornerRadius;
+  const family = fontStack(el.font);
 
-  const titleProps = {
-    text: el.title,
-    fontSize: el.titleSize,
-    fontStyle: 'bold',
-    fontFamily: FONT_FAMILY,
-    fill: el.titleColor,
-    wrap: 'none' as const,
-    ellipsis: true,
-    listening: false,
-  };
-  const subProps = {
-    text: el.subtitle,
-    fontSize: el.subtitleSize,
-    fontFamily: FONT_FAMILY,
-    fill: el.subtitleColor,
-    wrap: 'none' as const,
-    ellipsis: true,
-    listening: false,
-  };
-
-  let body: React.ReactNode;
-  if (layout === 'photo') {
-    const ph = Math.max(10, h - textH);
-    body = (
-      <>
-        <Group clipFunc={(ctx) => roundRectPath(ctx, 0, 0, w, h, r)} listening={false}>
-          {hasImage ? (
-            <CoverImage src={src!} x={0} y={0} w={w} h={ph} zoom={el.imageZoom} fx={el.imageFocusX} fy={el.imageFocusY} />
-          ) : (
-            <Placeholder x={0} y={0} w={w} h={ph} title={el.title} />
-          )}
-        </Group>
-        <Text {...titleProps} x={4} y={ph + 6} width={w - 8} align="center" />
-        {el.subtitle && <Text {...subProps} x={4} y={ph + 8 + el.titleSize * 1.3} width={w - 8} align="center" />}
-      </>
-    );
-  } else if (layout === 'circle') {
-    const d = Math.max(10, Math.min(w - 12, h - textH - 8));
-    const cx = w / 2,
-      cy = 6 + d / 2;
-    body = (
-      <>
-        <Group clipFunc={(ctx) => ctx.arc(cx, cy, d / 2, 0, Math.PI * 2)} listening={false}>
-          {hasImage ? (
-            <CoverImage src={src!} x={cx - d / 2} y={cy - d / 2} w={d} h={d} zoom={el.imageZoom} fx={el.imageFocusX} fy={el.imageFocusY} />
-          ) : (
-            <Placeholder x={cx - d / 2} y={cy - d / 2} w={d} h={d} title={el.title} round />
-          )}
-        </Group>
-        <Text {...titleProps} x={4} y={d + 14} width={w - 8} align="center" />
-        {el.subtitle && <Text {...subProps} x={4} y={d + 16 + el.titleSize * 1.3} width={w - 8} align="center" />}
-      </>
-    );
-  } else if (layout === 'inline') {
-    const s = Math.max(10, h - 10);
-    const tx = s + 14;
-    const block = el.titleSize * 1.25 + (el.subtitle ? el.subtitleSize * 1.4 : 0);
-    const ty = (h - block) / 2;
-    body = (
-      <>
-        <Group clipFunc={(ctx) => roundRectPath(ctx, 5, 5, s, s, Math.min(r, s / 2))} listening={false}>
-          {hasImage ? (
-            <CoverImage src={src!} x={5} y={5} w={s} h={s} zoom={el.imageZoom} fx={el.imageFocusX} fy={el.imageFocusY} />
-          ) : (
-            <Placeholder x={5} y={5} w={s} h={s} title={el.title} />
-          )}
-        </Group>
-        <Text {...titleProps} x={tx} y={ty} width={Math.max(10, w - tx - 6)} />
-        {el.subtitle && <Text {...subProps} x={tx} y={ty + el.titleSize * 1.3} width={Math.max(10, w - tx - 6)} />}
-      </>
-    );
-  } else {
-    const block = el.titleSize * 1.25 + (el.subtitle ? el.subtitleSize * 1.5 : 0);
-    const ty = (h - block) / 2;
-    body = (
-      <>
-        <Text {...titleProps} x={4} y={ty} width={w - 8} align="center" />
-        {el.subtitle && <Text {...subProps} x={4} y={ty + el.titleSize * 1.35} width={w - 8} align="center" />}
-      </>
+  let photo: React.ReactNode = null;
+  if (L.photo) {
+    const p = L.photo;
+    const clip = (ctx: Konva.Context) =>
+      p.round ? ctx.arc(p.x + p.w / 2, p.y + p.h / 2, p.w / 2, 0, Math.PI * 2) : roundRectPath(ctx, p.x, p.y, p.w, p.h, L.layout === 'inline' ? Math.min(r, p.w / 2) : 0);
+    photo = (
+      <Group clipFunc={clip} listening={false}>
+        {hasImage ? (
+          <CoverImage src={src!} x={p.x} y={p.y} w={p.w} h={p.h} zoom={el.imageZoom} fx={el.imageFocusX} fy={el.imageFocusY} />
+        ) : (
+          <Placeholder x={p.x} y={p.y} w={p.w} h={p.h} title={el.title} round={p.round} font={el.font} />
+        )}
+      </Group>
     );
   }
 
@@ -189,19 +124,52 @@ export function CardShape({ el, src, h: handlers }: { el: CardEl; src?: string; 
           ctx.fillStrokeShape(shape);
         }}
       />
-      {body}
-      {el.badge && <Badge text={el.badge} fill={el.badgeFill} color={el.badgeColor} />}
+      <Group clipFunc={(ctx) => roundRectPath(ctx, 0, 0, w, h, r)} listening={false}>
+        {!isTransparent(el.textBg) && <Rect x={L.text.x} y={L.text.y} width={L.text.w} height={L.text.h} fill={el.textBg} />}
+        {photo}
+        <Text
+          x={L.title.x}
+          y={L.title.y}
+          width={L.title.w}
+          height={L.title.h + 1}
+          text={el.title}
+          fontSize={el.titleSize}
+          fontStyle={boldStyle(el.font, true)}
+          fontFamily={family}
+          fill={el.titleColor}
+          align={L.align}
+          lineHeight={1.25}
+          wrap={L.title.lines > 1 ? 'char' : 'none'}
+          ellipsis
+        />
+        {L.subtitle && (
+          <Text
+            x={L.subtitle.x}
+            y={L.subtitle.y}
+            width={L.subtitle.w}
+            text={el.subtitle}
+            fontSize={el.subtitleSize}
+            fontStyle={boldStyle(el.font, false)}
+            fontFamily={family}
+            fill={el.subtitleColor}
+            align={L.align}
+            wrap="none"
+            ellipsis
+          />
+        )}
+        {el.badge && <Badge text={el.badge} fill={el.badgeFill} color={el.badgeColor} size={el.badgeSize} font={el.font} />}
+      </Group>
     </Group>
   );
 }
 
-function Badge({ text, fill, color }: { text: string; fill: string; color: string }) {
-  const size = 14;
-  const tw = measureText(text, size, true);
+function Badge({ text, fill, color, size, font }: { text: string; fill: string; color: string; size: number; font: string }) {
+  const tw = measureText(text, size, true, font);
+  const pad = Math.max(3, size * 0.4);
   return (
     <Group listening={false}>
-      <Rect x={0} y={0} width={tw + 12} height={size + 10} fill={fill} cornerRadius={[0, 0, 4, 0]} />
-      <Text x={6} y={5} text={text} fontSize={size} fontStyle="bold" fontFamily={FONT_FAMILY} fill={color} />
+      <Rect x={0} y={0} width={tw + pad * 2} height={size * 1.25 + pad} fill={fill} cornerRadius={[0, 0, 4, 0]} />
+      <Text x={pad} y={pad / 2 + size * 0.05} text={text} fontSize={size} fontStyle={boldStyle(font, true)} fontFamily={fontStack(font)} fill={color} />
     </Group>
   );
 }
@@ -266,34 +234,44 @@ export function FrameShape({ el, h: handlers }: { el: FrameEl; h: ShapeHandlers 
   );
 }
 
-function FrameTitle({ el, onDown, onDbl }: { el: FrameEl; onDown: (e: KEvt) => void; onDbl: () => void }) {
+/** 枠の見出しの位置と大きさ（ページ座標） */
+export function frameTitleBox(el: FrameEl) {
   const size = el.titleSize;
-  const subSize = Math.max(9, Math.round(size * 0.5));
-  const tw = Math.max(measureText(el.title, size, true), el.subtitle ? measureText(el.subtitle, subSize, true) : 0);
+  const sub = el.subtitleSize;
+  const tw = Math.max(measureText(el.title, size, true, el.font), el.subtitle ? measureText(el.subtitle, sub, true, el.font) : 0);
   const bw = tw + 20;
-  const bh = size * 1.3 + (el.subtitle ? subSize * 1.3 : 0) + 10;
-  // 多角形は最上段の左端を基準にする
-  let ax = 0;
+  const bh = size * 1.3 + (el.subtitle ? sub * 1.3 : 0) + 10;
+  const bottom = el.titlePos === 'insideBottom';
+  // 見出しを置く辺の範囲（多角形は最上段／最下段の辺）
+  let L = 0,
+    R = el.width;
   if (el.shape === 'polygon') {
     const ys = el.points.filter((_, i) => i % 2 === 1);
-    const minY = Math.min(...ys);
-    const xs = el.points.filter((_, i) => i % 2 === 0 && el.points[i + 1] === minY);
-    ax = Math.min(...xs);
+    const edgeY = bottom ? Math.max(...ys) : Math.min(...ys);
+    const xs = el.points.filter((_, i) => i % 2 === 0 && Math.abs(el.points[i + 1] - edgeY) < 0.5);
+    L = Math.min(...xs);
+    R = Math.max(...xs);
   }
-  let x = el.x + ax + 12,
-    y = el.y + 10;
-  if (el.titlePos === 'onTopEdge') y = el.y - bh / 2;
-  if (el.titlePos === 'outsideTopLeft') {
-    x = el.x + ax;
-    y = el.y - bh - 4;
-  }
+  const outside = el.titlePos === 'outsideTopLeft';
+  const inset = outside ? 0 : 12;
+  const x =
+    el.titleAlign === 'center' ? (L + R) / 2 - bw / 2 : el.titleAlign === 'right' ? R - inset - bw : L + inset;
+  const y =
+    el.titlePos === 'onTopEdge' ? -bh / 2 : outside ? -bh - 4 : bottom ? el.height - bh - 10 : 10;
+  return { x: el.x + x + el.titleDx, y: el.y + y + el.titleDy, w: bw, h: bh };
+}
+
+function FrameTitle({ el, onDown, onDbl }: { el: FrameEl; onDown: (e: KEvt) => void; onDbl: () => void }) {
+  const b = frameTitleBox(el);
+  const family = fontStack(el.font);
+  const weight = boldStyle(el.font, true);
   const bg = isTransparent(el.titleBg) ? undefined : el.titleBg;
   return (
-    <Group x={x} y={y} onPointerDown={onDown} onDblClick={onDbl} onDblTap={onDbl}>
-      <Rect width={bw} height={bh} fill={bg} cornerRadius={2} hitFunc={(ctx, s) => { ctx.beginPath(); ctx.rect(0, 0, bw, bh); ctx.fillStrokeShape(s); }} />
-      <Text x={10} y={5} text={el.title} fontSize={size} fontStyle="bold" fontFamily={FONT_FAMILY} fill={el.titleColor} listening={false} />
+    <Group x={b.x} y={b.y} onPointerDown={onDown} onDblClick={onDbl} onDblTap={onDbl}>
+      <Rect width={b.w} height={b.h} fill={bg} cornerRadius={2} hitFunc={(ctx, s) => { ctx.beginPath(); ctx.rect(0, 0, b.w, b.h); ctx.fillStrokeShape(s); }} />
+      <Text x={10} y={5} width={b.w - 20} align={el.titleAlign} text={el.title} fontSize={el.titleSize} fontStyle={weight} fontFamily={family} fill={el.titleColor} wrap="none" listening={false} />
       {el.subtitle && (
-        <Text x={10} y={5 + size * 1.25} text={el.subtitle} fontSize={subSize} fontStyle="bold" fontFamily={FONT_FAMILY} fill={el.titleColor} opacity={0.8} listening={false} />
+        <Text x={10} y={5 + el.titleSize * 1.25} width={b.w - 20} align={el.titleAlign} text={el.subtitle} fontSize={el.subtitleSize} fontStyle={weight} fontFamily={family} fill={el.titleColor} opacity={0.8} wrap="none" listening={false} />
       )}
     </Group>
   );
@@ -304,8 +282,8 @@ function FrameTitle({ el, onDown, onDbl }: { el: FrameEl; onDown: (e: KEvt) => v
 export function TextShape({ el, h: handlers }: { el: TextEl; h: ShapeHandlers }) {
   const common = {
     fontSize: el.fontSize,
-    fontStyle: el.bold ? 'bold' : 'normal',
-    fontFamily: FONT_FAMILY,
+    fontStyle: boldStyle(el.font, el.bold),
+    fontFamily: fontStack(el.font),
     fill: el.fill,
     stroke: el.strokeWidth > 0 ? el.strokeColor : undefined,
     strokeWidth: el.strokeWidth,
@@ -416,7 +394,7 @@ export function EdgeShape(props: {
   let label: React.ReactNode = null;
   if (el.label) {
     const text = el.labelVertical ? toVertical(el.label) : el.label;
-    const tw = el.labelVertical ? el.labelSize * 1.1 : measureText(el.label, el.labelSize, true);
+    const tw = el.labelVertical ? el.labelSize * 1.1 : measureText(el.label, el.labelSize, true, el.labelFont);
     const th = el.labelVertical ? [...el.label].length * el.labelSize * 1.08 : el.labelSize * 1.2;
     const pad = 4;
     label = (
@@ -426,8 +404,8 @@ export function EdgeShape(props: {
           text={text}
           padding={pad}
           fontSize={el.labelSize}
-          fontStyle="bold"
-          fontFamily={FONT_FAMILY}
+          fontStyle={boldStyle(el.labelFont, true)}
+          fontFamily={fontStack(el.labelFont)}
           fill={el.labelColor}
           align="center"
           lineHeight={el.labelVertical ? 1.08 : 1.2}

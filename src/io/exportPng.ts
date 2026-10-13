@@ -2,6 +2,7 @@ import { stageRef } from '../canvas/stageRef';
 import { useStore } from '../store/useStore';
 import { downloadBlob } from './image';
 import { safeName } from './projectFile';
+import { loadDocFonts } from './fontUsage';
 
 export interface ExportOptions {
   pixelRatio: number;
@@ -14,6 +15,10 @@ export async function exportImage(opts: ExportOptions) {
   const stage = stageRef.current;
   if (!stage) return;
   const { doc } = useStore.getState();
+  // フォントの読み込みを待ってから描く
+  await loadDocFonts(doc);
+  await document.fonts?.ready;
+  stage.find('Text').forEach((t) => (t as unknown as { _setTextData?: () => void })._setTextData?.());
 
   const prev = { scale: stage.scaleX(), x: stage.x(), y: stage.y() };
   const uiNodes = stage.find('.ui');

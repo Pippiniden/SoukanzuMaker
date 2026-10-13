@@ -38,9 +38,16 @@ export interface CardEl extends BaseEl {
   imageFocusY: number;
   title: string;
   subtitle: string;
+  /** 名前・サブテキストのフォント */
+  font: string;
+  /** 文字エリアの高さ（px、0 = 自動） */
+  textArea: number;
+  /** 文字エリアの背景（名札の帯）。transparent でカードの背景のまま */
+  textBg: string;
   badge: string;
   badgeFill: string;
   badgeColor: string;
+  badgeSize: number;
   fill: string;
   stroke: string;
   strokeWidth: number;
@@ -53,7 +60,9 @@ export interface CardEl extends BaseEl {
 }
 
 export type FrameShape = 'rect' | 'ellipse' | 'polygon';
-export type FrameTitlePos = 'insideTopLeft' | 'onTopEdge' | 'outsideTopLeft' | 'none';
+/** 見出しの縦位置（名前は互換のため旧名を残している） */
+export type FrameTitlePos = 'insideTopLeft' | 'onTopEdge' | 'outsideTopLeft' | 'insideBottom' | 'none';
+export type Align = 'left' | 'center' | 'right';
 
 export interface FrameEl extends BaseEl {
   type: 'frame';
@@ -73,9 +82,15 @@ export interface FrameEl extends BaseEl {
   title: string;
   subtitle: string;
   titlePos: FrameTitlePos;
+  titleAlign: Align;
+  /** 見出し位置の微調整（px） */
+  titleDx: number;
+  titleDy: number;
   titleColor: string;
   titleSize: number;
+  subtitleSize: number;
   titleBg: string;
+  font: string;
 }
 
 export type Routing = 'straight' | 'orthogonal' | 'curved';
@@ -111,6 +126,7 @@ export interface EdgeEl {
   label: string;
   labelColor: string;
   labelSize: number;
+  labelFont: string;
   labelBg: string;
   /** ラベルの位置（線の長さに対する割合 0〜1） */
   labelPos: number;
@@ -123,6 +139,7 @@ export interface TextEl extends BaseEl {
   width: number;
   fontSize: number;
   fill: string;
+  font: string;
   bold: boolean;
   vertical: boolean;
   align: 'left' | 'center' | 'right';
@@ -153,6 +170,12 @@ export interface DocSettings {
   gridSize: number;
   showGrid: boolean;
   snap: boolean;
+  /** 何マスごとに太線を引くか（0 = 引かない） */
+  majorEvery: number;
+  /** ドラッグ中に他の要素と揃う位置へ吸い付け、ガイド線を出す */
+  guides: boolean;
+  /** 新しく作る要素のフォント */
+  font: string;
 }
 
 export interface Doc {

@@ -24,6 +24,8 @@ interface State {
   /** 分岐から矢印を引くときに引き継ぐ見た目 */
   edgeStyle: Partial<EdgeEl>;
   vertexEdit: Id | null;
+  /** 写真の位置を調整中のカード */
+  photoEdit: Id | null;
   orthoVertex: boolean;
   past: Doc[];
   future: Doc[];
@@ -75,6 +77,7 @@ export const useStore = create<State>()((set, get) => ({
   edgeFrom: null,
   edgeStyle: {},
   vertexEdit: null,
+  photoEdit: null,
   orthoVertex: true,
   past: [],
   future: [],
@@ -143,9 +146,14 @@ export const useStore = create<State>()((set, get) => ({
 
   setSelection: (ids) => {
     const v = get().vertexEdit;
-    set({ selection: ids, vertexEdit: v && ids.length === 1 && ids[0] === v ? v : null });
+    const pe = get().photoEdit;
+    set({
+      selection: ids,
+      vertexEdit: v && ids.length === 1 && ids[0] === v ? v : null,
+      photoEdit: pe && ids.length === 1 && ids[0] === pe ? pe : null,
+    });
   },
-  setTool: (t) => set({ tool: t, edgeFrom: null, vertexEdit: t === 'select' ? get().vertexEdit : null }),
+  setTool: (t) => set({ tool: t, edgeFrom: null, vertexEdit: t === 'select' ? get().vertexEdit : null, photoEdit: null }),
 
   reorder: (ids, where) => {
     const sel = new Set(ids);

@@ -157,6 +157,10 @@ export function Toolbar() {
           <input type="checkbox" checked={settings.snap} onChange={(e) => setSettings({ snap: e.target.checked })} />
           吸着
         </label>
+        <label className="check" title="他の要素の端・中央に揃えて吸い付け、ガイド線を表示（ドラッグ中に Alt で一時オフ）">
+          <input type="checkbox" checked={settings.guides} onChange={(e) => setSettings({ guides: e.target.checked })} />
+          ガイド
+        </label>
         <input
           type="number"
           className="grid-size"

@@ -1,3 +1,4 @@
+import { FONTS, fontStack } from '../model/fonts';
 import type { ReactNode } from 'react';
 
 export function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -134,5 +135,18 @@ export function Seg<T extends string>(props: { value: T; options: { value: T; la
         </button>
       ))}
     </span>
+  );
+}
+
+/** フォントの選択（それぞれのフォントで名前を表示） */
+export function FontSelect(props: { value: string; onChange: (v: string) => void }) {
+  return (
+    <select value={props.value} onChange={(e) => props.onChange(e.target.value)} style={{ fontFamily: fontStack(props.value) }}>
+      {FONTS.map((f) => (
+        <option key={f.key} value={f.key} style={{ fontFamily: fontStack(f.key) }}>
+          {f.label}
+        </option>
+      ))}
+    </select>
   );
 }

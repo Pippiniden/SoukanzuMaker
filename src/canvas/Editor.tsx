@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Circle, Layer, Rect, Shape, Stage, Transformer } from 'react-konva';
+import { Circle, Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
+import { collectTargets, guidesFor, snapBox, snapPoint, unionBox, type Guide, type GuideTargets } from './guides';
 import type Konva from 'konva';
-import { useStore } from '../store/useStore';
+import { patchEls, useStore } from '../store/useStore';
 import type { BoxElement, CardEl, EdgeEl, Element, FrameEl, Id, JunctionEl } from '../model/types';
-import { boxOf, boxesIntersect, edgeGeometry, frameContents, isBox, moveVertexOrtho, nearestSide, normalizePolygon, projectOnPolyline, snap, type Pt } from '../model/geometry';
+import { boxOf, boxesIntersect, edgeGeometry, frameContents, isBox, moveVertexOrtho, nearestSide, normalizePolygon, projectOnPolyline, snap, type Box, type Pt } from '../model/geometry';
 import { makeCard, makeEdge, makeFrame, makeImage, makeText } from '../model/defaults';
 import { CardShape, EdgeShape, FrameShape, ImageShape, JunctionShape, TextShape, type ShapeHandlers } from './shapes';
 import { insertWaypointIndex, shiftWaypoints, splitEdge, waypointStarts } from '../model/edgeOps';
 import { stageRef } from './stageRef';
+import { cardLayout } from './cardLayout';
+import { PhotoEditor } from './PhotoEditor';
 import { fileToDataUrl } from '../io/image';
 
 interface DragState {
   wpStarts: Map<Id, Pt[]>;
+  /** 揃える相手と、動かす要素全体の最初の範囲 */
+  targets: GuideTargets;
+  box0: Box | null;
   primary: Id;
   startPointer: { x: number; y: number };
   starts: Map<Id, { x: number; y: number }>;
@@ -37,6 +43,7 @@ export function Editor() {
   const view = useStore((s) => s.view);
   const edgeFrom = useStore((s) => s.edgeFrom);
   const vertexEdit = useStore((s) => s.vertexEdit);
+  const photoEdit = useStore((s) => s.photoEdit);
   const fontEpoch = useStore((s) => s.fontEpoch);
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -45,6 +52,8 @@ export function Editor() {
   const trRef = useRef<Konva.Transformer>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [marquee, setMarquee] = useState<Marquee | null>(null);
+  const [guides, setGuides] = useState<Guide[]>([]);
+  const trTargets = useRef<GuideTargets | null>(null);
   const marqueeRef = useRef<Marquee | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const drag = useRef<DragState | null>(null);
@@ -97,7 +106,17 @@ export function Editor() {
   const onWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
     const s = stage.current!;
-    const { view, setView } = useStore.getState();
+    const { view, setView, photoEdit } = useStore.getState();
+    // 写真の位置合わせ中はホイールで写真を拡大縮小
+    if (photoEdit && !(e.evt.ctrlKey || e.evt.metaKey)) {
+      const st = useStore.getState();
+      const card = st.doc.elements.find((x) => x.id === photoEdit) as CardEl | undefined;
+      if (card) {
+        const z = Math.min(5, Math.max(1, card.imageZoom * Math.exp(-e.evt.deltaY * 0.002)));
+        patchEls([card.id], { imageZoom: Math.round(z * 100) / 100 } as Partial<Element>);
+      }
+      return;
+    }
     if (e.evt.ctrlKey || e.evt.metaKey) {
       const p = s.getPointerPosition()!;
       const factor = Math.exp(-e.evt.deltaY * 0.01);
@@ -151,7 +170,7 @@ export function Editor() {
           else if (st.edgeFrom !== target) {
             const fromEl = st.doc.elements.find((x) => x.id === st.edgeFrom);
             const base = fromEl?.type === 'junction' ? useStore.getState().edgeStyle : {};
-            const edge = makeEdge(st.edgeFrom, target, { ...base, ...style });
+            const edge = makeEdge(st.edgeFrom, target, { labelFont: st.doc.settings.font, ...base, ...style });
             st.addElements([edge]);
             st.set({ edgeFrom: null, edgeStyle: {} });
           }
@@ -182,7 +201,10 @@ export function Editor() {
           const m = st.doc.elements.find((x) => x.id === mid) as BoxElement;
           starts.set(mid, { x: m.x, y: m.y });
         }
+        const moverBoxes = [...movers].map((mid) => boxOf(st.doc.elements.find((x) => x.id === mid) as BoxElement));
         drag.current = {
+          targets: collectTargets(st.doc, movers),
+          box0: moverBoxes.length ? unionBox(moverBoxes) : null,
           wpStarts: waypointStarts(st.doc, movers),
           primary: id,
           startPointer: toPage(e.evt.clientX, e.evt.clientY),
@@ -197,6 +219,15 @@ export function Editor() {
         const el = st.doc.elements.find((x) => x.id === id);
         if (!el) return;
         st.setSelection([id]);
+        // 写真の部分をダブルクリック → 写真の位置合わせ
+        if (el.type === 'card' && el.imageId && st.assets[el.imageId]) {
+          const p = cardLayout(el, true).photo;
+          const ptr = stage.current?.getRelativePointerPosition();
+          if (p && ptr && ptr.x >= el.x + p.x && ptr.x <= el.x + p.x + p.w && ptr.y >= el.y + p.y && ptr.y <= el.y + p.y + p.h) {
+            st.set({ photoEdit: id });
+            return;
+          }
+        }
         if (el.type === 'frame' && el.shape === 'polygon') {
           st.set({ vertexEdit: id });
           return;
@@ -229,18 +260,33 @@ export function Editor() {
           d.moved = true;
           st.beginGesture();
         }
-        // 操作中の要素の左上だけをグリッドに合わせ、他は同じだけ動かす
+        // 1) 他の要素やページの端・中央に近ければそこへ揃える（整列ガイド）
+        // 2) 揃わなかった向きは、操作中の要素の左上をグリッドに合わせる
         const ps = d.starts.get(d.primary);
+        let gx = false,
+          gy = false;
+        if (st.doc.settings.guides && d.box0 && !evt.altKey) {
+          const g = snapBox({ ...d.box0, x: d.box0.x + dx, y: d.box0.y + dy }, d.targets, 6 / st.view.scale);
+          if (g.dx !== null) {
+            dx += g.dx;
+            gx = true;
+          }
+          if (g.dy !== null) {
+            dy += g.dy;
+            gy = true;
+          }
+        }
         if (ps && snapOn(evt)) {
           const g = st.doc.settings.gridSize;
-          dx = snap(ps.x + dx, g) - ps.x;
-          dy = snap(ps.y + dy, g) - ps.y;
+          if (!gx) dx = snap(ps.x + dx, g) - ps.x;
+          if (!gy) dy = snap(ps.y + dy, g) - ps.y;
         }
+        setGuides(d.box0 && st.doc.settings.guides ? guidesFor({ ...d.box0, x: d.box0.x + dx, y: d.box0.y + dy }, d.targets) : []);
         st.live((doc) => ({
           ...doc,
           elements: doc.elements.map((el) => {
             const s0 = d.starts.get(el.id);
-            if (s0) return { ...el, x: s0.x + dx, y: s0.y + dy } as Element;
+            if (s0) return { ...el, x: Math.round((s0.x + dx) * 100) / 100, y: Math.round((s0.y + dy) * 100) / 100 } as Element;
             return shiftWaypoints(el, d.wpStarts, dx, dy);
           }),
         }));
@@ -261,6 +307,7 @@ export function Editor() {
       const d = drag.current;
       if (d) {
         drag.current = null;
+        setGuides([]);
         const st = useStore.getState();
         if (d.moved) st.endGesture();
         else if (!d.additive && d.clickedSelected && st.selection.length > 1) st.setSelection([d.primary]);
@@ -314,21 +361,22 @@ export function Editor() {
     const g = st.doc.settings.gridSize;
     const sp = snapOn(evt) ? { x: snap(p.x, g), y: snap(p.y, g) } : p;
 
+    const font = st.doc.settings.font;
     if (st.tool === 'card') {
-      st.addElements([makeCard(sp.x, sp.y)]);
+      st.addElements([makeCard(sp.x, sp.y, { font })]);
       st.setTool('select');
       return;
     }
     if (st.tool === 'text') {
-      st.addElements([makeText(sp.x, sp.y)]);
+      st.addElements([makeText(sp.x, sp.y, { font })]);
       st.setTool('select');
       return;
     }
     if (st.tool === 'frame') {
       const kind = st.frameKind;
       const frame = kind.startsWith('poly:')
-        ? makeFrame(sp.x, sp.y, 'polygon', {}, kind.slice(5))
-        : makeFrame(sp.x, sp.y, kind === 'ellipse' ? 'ellipse' : 'rect', { cornerRadius: kind === 'round' ? 24 : 0 });
+        ? makeFrame(sp.x, sp.y, 'polygon', { font }, kind.slice(5))
+        : makeFrame(sp.x, sp.y, kind === 'ellipse' ? 'ellipse' : 'rect', { font, cornerRadius: kind === 'round' ? 24 : 0 });
       // 枠は背面に置く
       st.commit((d) => ({ ...d, elements: [frame, ...d.elements] }));
       st.setSelection([frame.id]);
@@ -351,8 +399,11 @@ export function Editor() {
     () =>
       selection
         .map((id) => byId.get(id))
-        .filter((e): e is Exclude<BoxElement, JunctionEl> => !!e && isBox(e) && e.type !== 'junction' && !e.locked && !e.hidden && e.id !== vertexEdit),
-    [selection, byId, vertexEdit],
+        .filter(
+          (e): e is Exclude<BoxElement, JunctionEl> =>
+            !!e && isBox(e) && e.type !== 'junction' && !e.locked && !e.hidden && e.id !== vertexEdit && e.id !== photoEdit,
+        ),
+    [selection, byId, vertexEdit, photoEdit],
   );
   const keepRatio = transformTargets.length === 1 && transformTargets[0].type === 'image';
 
@@ -406,12 +457,28 @@ export function Editor() {
 
   const anchorSnap = (_old: Konva.Vector2d, next: Konva.Vector2d, evt: MouseEvent | undefined) => {
     const st = useStore.getState();
-    if (!snapOn(evt ?? { ctrlKey: false, metaKey: false })) return next;
-    const g = st.doc.settings.gridSize * st.view.scale;
-    return {
-      x: Math.round((next.x - st.view.x) / g) * g + st.view.x,
-      y: Math.round((next.y - st.view.y) / g) * g + st.view.y,
-    };
+    const v = st.view;
+    let p = { x: (next.x - v.x) / v.scale, y: (next.y - v.y) / v.scale };
+    let gx = false,
+      gy = false;
+    // 変形ハンドルも他の要素の端・中央に吸い付ける
+    if (st.doc.settings.guides && trTargets.current && !evt?.altKey) {
+      const g = snapPoint(p, trTargets.current, 6 / v.scale);
+      if (g.dx !== null) {
+        p = { ...p, x: p.x + g.dx };
+        gx = true;
+      }
+      if (g.dy !== null) {
+        p = { ...p, y: p.y + g.dy };
+        gy = true;
+      }
+      setGuides(guidesFor({ x: p.x, y: p.y, w: 0, h: 0 }, trTargets.current));
+    }
+    if (snapOn(evt ?? { ctrlKey: false, metaKey: false })) {
+      const g = st.doc.settings.gridSize;
+      p = { x: gx ? p.x : snap(p.x, g), y: gy ? p.y : snap(p.y, g) };
+    }
+    return { x: p.x * v.scale + v.x, y: p.y * v.scale + v.y };
   };
 
   // ---------- 画像のドロップ ----------
@@ -461,6 +528,7 @@ export function Editor() {
   // ---------- 描画 ----------
 
   const selectedEdge = selection.length === 1 && byId.get(selection[0])?.type === 'edge' ? (byId.get(selection[0]) as EdgeEl) : undefined;
+  const photoCard = photoEdit ? (byId.get(photoEdit) as CardEl | undefined) : undefined;
   const vertexFrame = vertexEdit ? (byId.get(vertexEdit) as FrameEl | undefined) : undefined;
   const edgeFromEl = edgeFrom ? byId.get(edgeFrom) : undefined;
   const cursor =
@@ -513,7 +581,9 @@ export function Editor() {
                 }
               : { fill: doc.background })}
           />
-          {doc.settings.showGrid && <Grid w={doc.width} h={doc.height} g={doc.settings.gridSize} scale={view.scale} />}
+          {doc.settings.showGrid && (
+            <Grid w={doc.width} h={doc.height} g={doc.settings.gridSize} major={doc.settings.majorEvery} scale={view.scale} />
+          )}
         </Layer>
 
         <Layer ref={contentLayer} key={fontEpoch}>
@@ -576,16 +646,25 @@ export function Editor() {
             anchorCornerRadius={2}
             borderStroke="#4f8cff"
             anchorStroke="#4f8cff"
-            onTransformStart={() => useStore.getState().beginGesture()}
+            onTransformStart={() => {
+              const st = useStore.getState();
+              trTargets.current = collectTargets(st.doc, new Set(transformTargets.map((t) => t.id)));
+              st.beginGesture();
+            }}
             onTransform={applyTransform}
             onTransformEnd={() => {
               applyTransform();
               useStore.getState().endGesture();
+              trTargets.current = null;
+              setGuides([]);
             }}
             anchorDragBoundFunc={anchorSnap}
             boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)}
           />
           {vertexFrame && vertexFrame.shape === 'polygon' && <VertexHandles frame={vertexFrame} scale={view.scale} />}
+          {photoCard && photoCard.imageId && assets[photoCard.imageId] && (
+            <PhotoEditor card={photoCard} src={assets[photoCard.imageId]} scale={view.scale} toPage={toPage} />
+          )}
           {tool === 'select' && selectedEdge && (
             <EdgeHandles
               edge={selectedEdge}
@@ -596,6 +675,15 @@ export function Editor() {
               snapOn={snapOn}
             />
           )}
+          {guides.map((g, i) => (
+            <Line
+              key={'g' + i}
+              points={g.axis === 'x' ? [g.v, g.from, g.v, g.to] : [g.from, g.v, g.to, g.v]}
+              stroke="#e8467c"
+              strokeWidth={1 / view.scale}
+              listening={false}
+            />
+          ))}
           {marquee && (
             <Rect
               x={Math.min(marquee.x0, marquee.x1)}
@@ -616,28 +704,47 @@ export function Editor() {
 
 // ---------- グリッド ----------
 
-function Grid({ w, h, g, scale }: { w: number; h: number; g: number; scale: number }) {
+function Grid({ w, h, g, major, scale }: { w: number; h: number; g: number; major: number; scale: number }) {
   return (
     <Shape
       name="ui"
       listening={false}
       sceneFunc={(ctx) => {
         const c = ctx._context;
+        const majorStep = major > 0 ? g * major : 0;
+        const isMajor = (v: number) => majorStep > 0 && Math.abs(v / majorStep - Math.round(v / majorStep)) < 1e-6;
         c.save();
-        c.beginPath();
-        // 細かすぎるときは間引く
+        // 細かい線（細かすぎるときは間引く）
         const step = g * Math.max(1, Math.ceil(6 / (g * scale)));
+        c.beginPath();
         for (let x = step; x < w; x += step) {
+          if (isMajor(x)) continue;
           c.moveTo(x, 0);
           c.lineTo(x, h);
         }
         for (let y = step; y < h; y += step) {
+          if (isMajor(y)) continue;
           c.moveTo(0, y);
           c.lineTo(w, y);
         }
-        c.strokeStyle = 'rgba(70, 90, 130, 0.13)';
+        c.strokeStyle = 'rgba(70, 90, 130, 0.12)';
         c.lineWidth = 1 / scale;
         c.stroke();
+        // 太線（指定したマス数ごと）
+        if (majorStep > 0 && majorStep * scale >= 6) {
+          c.beginPath();
+          for (let x = majorStep; x < w; x += majorStep) {
+            c.moveTo(x, 0);
+            c.lineTo(x, h);
+          }
+          for (let y = majorStep; y < h; y += majorStep) {
+            c.moveTo(0, y);
+            c.lineTo(w, y);
+          }
+          c.strokeStyle = 'rgba(55, 75, 120, 0.3)';
+          c.lineWidth = 1.6 / scale;
+          c.stroke();
+        }
         c.restore();
       }}
     />
